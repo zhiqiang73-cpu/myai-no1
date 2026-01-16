@@ -508,11 +508,24 @@ class TradingAgent:
         elif regime == "VOLATILE":
             regime_multiplier = 0.7  # Be cautious
 
-        # Trend contribution (20 points base)
-        if market["macro_trend"]["direction"] == "BULLISH":
+        # Trend contribution (macro + micro)
+        macro_dir = market["macro_trend"]["direction"]
+        micro_dir = market.get("micro_trend", {}).get("direction")
+        if macro_dir == "BULLISH":
             long_score += 20
-        if market["macro_trend"]["direction"] == "BEARISH":
+        if macro_dir == "BEARISH":
             short_score += 20
+        if micro_dir == "BULLISH":
+            long_score += 10
+        if micro_dir == "BEARISH":
+            short_score += 10
+        # If macro and micro diverge, reduce the dominant side slightly
+        if macro_dir == "BULLISH" and micro_dir == "BEARISH":
+            long_score -= 5
+            short_score += 5
+        if macro_dir == "BEARISH" and micro_dir == "BULLISH":
+            short_score -= 5
+            long_score += 5
 
         # S/R score contribution (higher weight: score/2, max 35)
         if market.get("best_support"):
@@ -531,22 +544,35 @@ class TradingAgent:
             elif distance < 5:
                 short_score += min(20, market["best_resistance"]["score"] / 3 * sr_mult)
 
-        # RSI contribution (10 points)
+        # RSI contribution (10 points, 15m)
         rsi = analysis.get("rsi", 50)
         if rsi < 35:
             long_score += 10
         if rsi > 65:
             short_score += 10
 
-        # MACD contribution (10 points)
+        # MACD contribution (10 points, 15m)
         if analysis.get("macd_histogram", 0) > 0:
             long_score += 10
         if analysis.get("macd_histogram", 0) < 0:
             short_score += 10
 
-        # Apply regime multiplier
-        long_score = int(long_score * regime_multiplier)
-        short_score = int(short_score * regime_multiplier)
+        # 1m momentum boost to avoid long-bias in short-term downtrends
+        analysis_1m = market.get("analysis_1m", {})
+        macd_1m = analysis_1m.get("macd_histogram", 0)
+        rsi_1m = analysis_1m.get("rsi", 50)
+        if macd_1m > 0:
+            long_score += 5
+        if macd_1m < 0:
+            short_score += 5
+        if rsi_1m < 30:
+            long_score += 4
+        if rsi_1m > 70:
+            short_score += 4
+
+        # Apply regime multiplier and clamp to non-negative
+        long_score = int(max(0, long_score) * regime_multiplier)
+        short_score = int(max(0, short_score) * regime_multiplier)
 
         return {
             "long": long_score,

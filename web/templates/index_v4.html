@@ -277,6 +277,12 @@
             font-size: 10px;
             font-family: 'Consolas', monospace;
         }
+
+        /* 日志从下往上显示 */
+        #logs-container {
+            display: flex;
+            flex-direction: column-reverse;
+        }
         
         .log-time { color: #848e9c; margin-right: 8px; }
         .log-message { color: #e3e6e8; }
@@ -1018,64 +1024,31 @@
                 };
                 
                 let html = '';
-                html += '<div class="logic-section">';
-                html += '<div class="logic-title">因为：</div>';
-                data.ai_logic.because.forEach(item => {
-                    html += `<div class="logic-item">${item}</div>`;
-                });
-                html += '</div>';
-                
-                html += '<div class="logic-section">';
-                html += '<div class="logic-title">所以：</div>';
-                data.ai_logic.therefore.forEach(item => {
-                    html += `<div class="logic-item">${item}</div>`;
-                });
-                html += '</div>';
-                
-                html += `<div class="logic-conclusion">结论：${data.ai_logic.conclusion}</div>`;
-                
-                if (data.ai_logic.entry) {
-                    const entry = data.ai_logic.entry;
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                    html += '<div class="logic-title">入场评分：</div>';
-                    html += `<div class="logic-item">多头分数: ${Number(entry.long_score || 0).toFixed(0)}</div>`;
-                    html += `<div class="logic-item">空头分数: ${Number(entry.short_score || 0).toFixed(0)}</div>`;
-                    html += `<div class="logic-item">阈值: ${Number(entry.threshold || 0).toFixed(0)}</div>`;
-                    if (entry.last_entry) {
-                        html += `<div class="logic-item">最近入场: ${entry.last_entry.direction || ''} (${Number(entry.last_entry.strength || 0).toFixed(0)})</div>`;
-                        if (entry.last_entry.reason) {
-                            html += `<div class="logic-item">入场原因: ${entry.last_entry.reason}</div>`;
-                        }
-                    }
-                    html += '</div>';
-                }
+                const ai = data.ai_logic || {};
+                const because = Array.isArray(ai.because) ? ai.because : [];
+                const findPrefix = (prefix) => because.find((item) => item && item.startsWith(prefix)) || '';
+                const bigTrend = findPrefix('大趋势') || '大趋势: -';
+                const smallTrend = findPrefix('小趋势') || '小趋势: -';
+                const rsi = findPrefix('RSI') || 'RSI: -';
+                const macd = findPrefix('MACD') || 'MACD: -';
+                const support = findPrefix('支撑位') || '支撑位: -';
+                const resistance = findPrefix('阻力位') || '阻力位: -';
 
-                if (data.ai_logic.north_star && Object.keys(data.ai_logic.north_star).length > 0) {
-                    const ns = data.ai_logic.north_star;
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                    html += '<div class="logic-title">北极星指标：</div>';
-                    html += `<div class="logic-item">胜率: ${Number(ns.win_rate || 0).toFixed(2)}%</div>`;
-                    html += `<div class="logic-item">盈亏比: ${Number(ns.profit_factor || 0).toFixed(2)}</div>`;
-                    html += `<div class="logic-item">夏普: ${Number(ns.sharpe_ratio || 0).toFixed(3)}</div>`;
-                    html += `<div class="logic-item">综合评分: ${Number(ns.score || 0).toFixed(1)} | 模式: ${ns.mode || '-'}</div>`;
-                    if (ns.aggressive_delta) {
-                        html += `<div class="logic-item">探索加速: -${Number(ns.aggressive_delta || 0).toFixed(0)} 阈值</div>`;
-                    }
+                const addSection = (title, lines) => {
+                    const items = lines.filter(Boolean);
+                    if (!items.length) return;
+                    html += '<div class="logic-section" style="margin-top: 6px; border-top: 1px solid #2b3139; padding-top: 6px;">';
+                    html += `<div class="logic-title">${title}</div>`;
+                    items.slice(0, 3).forEach(line => {
+                        html += `<div class="logic-item">${line}</div>`;
+                    });
                     html += '</div>';
-                }
+                };
 
-                if (data.ai_logic.tf_weights) {
-                    const tw = data.ai_logic.tf_weights;
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                    html += '<div class="logic-title">本次周期权重：</div>';
-                    html += `<div class="logic-item">1m: ${(Number(tw['1m'] || 0) * 100).toFixed(1)}% | 15m: ${(Number(tw['15m'] || 0) * 100).toFixed(1)}%</div>`;
-                    html += `<div class="logic-item">8h: ${(Number(tw['8h'] || 0) * 100).toFixed(1)}% | 1w: ${(Number(tw['1w'] || 0) * 100).toFixed(1)}%</div>`;
-                    html += '</div>';
-                }
-                
-                // 市场状态识别
-                if (data.ai_logic.regime) {
-                    const rg = data.ai_logic.regime;
+                // 核心判断（最多3段）
+                let regimeLine = '';
+                if (ai.regime) {
+                    const rg = ai.regime;
                     const regimeLabels = {
                         'TRENDING': '趋势行情',
                         'TRENDING_VOLATILE': '波动趋势',
@@ -1084,111 +1057,93 @@
                         'NORMAL': '常规市场',
                         'UNKNOWN': '未知'
                     };
-                    const regimeColors = {
-                        'TRENDING': '#0ecb81',
-                        'TRENDING_VOLATILE': '#f0b90b',
-                        'RANGING': '#1890ff',
-                        'VOLATILE': '#f6465d',
-                        'NORMAL': '#848e9c',
-                        'UNKNOWN': '#848e9c'
-                    };
-                    const regimeColor = regimeColors[rg.regime] || '#848e9c';
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                    html += '<div class="logic-title">市场状态：</div>';
-                    html += `<div class="logic-item" style="color: ${regimeColor}; font-weight: bold;">${regimeLabels[rg.regime] || rg.regime} (置信度: ${(Number(rg.confidence || 0) * 100).toFixed(0)}%)</div>`;
-                    html += `<div class="logic-item">ATR比率: ${Number(rg.atr_ratio || 1).toFixed(2)} | 趋势强度: ${Number(rg.trend_strength || 0).toFixed(3)}%</div>`;
-                    if (rg.adjustments) {
-                        const adj = rg.adjustments;
-                        html += `<div class="logic-item">阈值调整: ${adj.entry_threshold_delta >= 0 ? '+' : ''}${adj.entry_threshold_delta || 0} | S/R权重倍数: ${Number(adj.sr_weight_multiplier || 1).toFixed(1)}x</div>`;
-                        html += `<div class="logic-item">TP倍数: ${Number(adj.tp_multiplier || 1).toFixed(1)}x | SL倍数: ${Number(adj.sl_multiplier || 1).toFixed(1)}x ${adj.prefer_breakout ? '| 偏好突破' : ''}</div>`;
+                    regimeLine = `市场: ${regimeLabels[rg.regime] || rg.regime} ${Number(rg.confidence || 0) * 100 >> 0}%`;
+                }
+
+                let breakoutLine = '';
+                if (ai.breakout) {
+                    const br = ai.breakout;
+                    const breakLabel = br.type === 'RESISTANCE_BREAK' ? '阻力突破(看多)' : '支撑突破(看空)';
+                    breakoutLine = `突破: ${breakLabel} ${br.confirmed ? '已确认' : '待确认'} ${Number(br.strength || 0) * 100 >> 0}%`;
+                }
+
+                const thereforeLine = Array.isArray(ai.therefore) && ai.therefore.length
+                    ? ai.therefore.join(' | ')
+                    : '';
+
+                addSection('核心判断', [
+                    `趋势: ${bigTrend} | ${smallTrend}${regimeLine ? ' | ' + regimeLine : ''}`,
+                    `指标: ${rsi} | ${macd}${thereforeLine ? ' | 评分: ' + thereforeLine : ''}`,
+                    `S/R: ${support} | ${resistance}${breakoutLine ? ' | ' + breakoutLine : ''} | 结论: ${ai.conclusion || '观望'}`
+                ]);
+
+                // 入场/持仓（最多3段）
+                const entry = ai.entry || {};
+                const entryLine = `入场分数: 多${Number(entry.long_score || 0).toFixed(0)} 空${Number(entry.short_score || 0).toFixed(0)} 阈值${Number(entry.threshold || 0).toFixed(0)}`;
+                let lastEntryLine = '';
+                if (entry.last_entry) {
+                    lastEntryLine = `最近入场: ${entry.last_entry.direction || '-'} (${Number(entry.last_entry.strength || 0).toFixed(0)})${entry.last_entry.reason ? ' | 原因: ' + entry.last_entry.reason : ''}`;
+                } else {
+                    lastEntryLine = '最近入场: -';
+                }
+
+                let posLine = '';
+                if (Array.isArray(ai.positions) && ai.positions.length > 0) {
+                    const p = ai.positions[0];
+                    const hold = p.hold_minutes == null ? '-' : `${p.hold_minutes.toFixed(1)}m`;
+                    const pnlVal = Number(p.pnl_percent || 0);
+                    const reason = exitReasonMap[p.exit_hint] || (p.exit_hint || '持仓中');
+                    const pnlText = `${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}%`;
+                    let extra = '';
+                    if (p.opportunity) {
+                        const gap = Number(p.opportunity.gap || 0);
+                        extra += ` | 机会差值 ${gap >= 0 ? '+' : ''}${gap.toFixed(1)}`;
                     }
-                    html += '</div>';
-                }
-                
-                // 突破信号
-                if (data.ai_logic.breakout) {
-                    const br = data.ai_logic.breakout;
-                    const breakColor = br.type === 'RESISTANCE_BREAK' ? '#0ecb81' : '#f6465d';
-                    const breakLabel = br.type === 'RESISTANCE_BREAK' ? '阻力突破 (看多)' : '支撑突破 (看空)';
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px; background: rgba(240, 185, 11, 0.1);">';
-                    html += '<div class="logic-title" style="color: #f0b90b;">突破信号：</div>';
-                    html += `<div class="logic-item" style="color: ${breakColor}; font-weight: bold;">${breakLabel}</div>`;
-                    html += `<div class="logic-item">强度: ${(Number(br.strength || 0) * 100).toFixed(0)}% | 确认: ${br.confirmed ? '是' : '等待'}</div>`;
-                    html += `<div class="logic-item">操作建议: ${br.action || '-'}</div>`;
-                    html += '</div>';
-                }
-                
-                // 离场学习参数
-                if (data.ai_logic.exit_learner) {
-                    const el = data.ai_logic.exit_learner;
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                    html += '<div class="logic-title">离场学习参数：</div>';
-                    html += `<div class="logic-item">快速止盈: ${Number(el.quick_profit_pct || 0.5).toFixed(2)}% | 标准止盈: ${Number(el.normal_profit_pct || 1.0).toFixed(2)}%</div>`;
-                    html += `<div class="logic-item">最大持仓: ${Number(el.max_hold_minutes || 60).toFixed(0)}分 | 追踪止损距离: ${Number(el.trailing_stop_distance || 0.4).toFixed(2)}%</div>`;
-                    html += `<div class="logic-item">离场统计: ${el.profitable_exits || 0}/${el.total_exits || 0} 盈利 (${Number(el.win_rate || 0).toFixed(1)}%)</div>`;
-                    html += '</div>';
-                }
-                
-                if (data.ai_logic.positions && data.ai_logic.positions.length > 0) {
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                    html += '<div class="logic-title">持仓/出场逻辑：</div>';
-                    data.ai_logic.positions.forEach(p => {
-                        const hold = p.hold_minutes == null ? '-' : `${p.hold_minutes.toFixed(1)}m`;
-                        const pnlVal = Number(p.pnl_percent || 0);
-                        const pnl = `${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}`;
-                        const pnlClass = pnlVal >= 0 ? 'positive' : 'negative';
-                        const reason = exitReasonMap[p.exit_hint] || (p.exit_hint || '持仓中');
-                        html += `<div class="logic-item">方向: ${p.direction} | 持仓: ${hold} | PnL: <span class="${pnlClass}">${pnl}%</span></div>`;
-                        html += `<div class="logic-item">SL: ${Number(p.stop_loss || 0).toFixed(2)} | TP: ${Number(p.take_profit || 0).toFixed(2)} | 提示: ${reason}</div>`;
-                        if (p.opportunity) {
-                            const gap = Number(p.opportunity.gap || 0);
-                            const gapText = `${gap >= 0 ? '+' : ''}${gap.toFixed(1)}`;
-                            html += `<div class="logic-item">机会切换条件: ${p.opportunity.label}分数 ${Number(p.opportunity.score || 0).toFixed(1)} / 需要 ${Number(p.opportunity.need || 0).toFixed(1)} | 差值 ${gapText}</div>`;
-                        }
-                        if (p.time_cost) {
-                            const holdMin = Number(p.time_cost.hold_minutes || 0);
-                            const maxHold = Number(p.time_cost.max_hold || 0);
-                            const currentProfit = Number(p.time_cost.current_profit || 0);
-                            const minProfit = Number(p.time_cost.min_profit || 0);
-                            const timeColor = holdMin >= maxHold && currentProfit < minProfit ? '#f0b90b' : '#848e9c';
-                            html += `<div class="logic-item" style="color: ${timeColor}">时间成本: 持仓 ${holdMin.toFixed(1)}分 / 超时 ${maxHold.toFixed(0)}分 | 盈利 ${currentProfit >= 0 ? '+' : ''}${currentProfit.toFixed(2)}% / 最低 ${minProfit.toFixed(2)}%</div>`;
-                        }
-                        if (p.exit_notes && p.exit_notes.length > 0) {
-                            html += `<div class="logic-item">提示依据: ${p.exit_notes.join(', ')}</div>`;
-                        }
-                    });
-                    html += '</div>';
-                }
-                
-                if (data.ai_logic.batch && data.ai_logic.batch.entry_batches) {
-                    const batches = data.ai_logic.batch.entry_batches;
-                    if (batches.length > 0) {
-                        html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                        html += '<div class="logic-title">分批计划：</div>';
-                        batches.forEach(b => {
-                            html += `<div class="logic-item">第${b.batch}批: ${Math.round(b.ratio * 100)}%</div>`;
-                        });
-                        html += '</div>';
+                    if (p.time_cost) {
+                        const holdMin = Number(p.time_cost.hold_minutes || 0);
+                        const maxHold = Number(p.time_cost.max_hold || 0);
+                        extra += ` | 时间 ${holdMin.toFixed(0)}/${maxHold.toFixed(0)}分`;
                     }
+                    posLine = `持仓: ${ai.positions.length}笔 | 首笔${p.direction} 持仓${hold} PnL ${pnlText} | ${reason}${extra}`;
+                    if (ai.positions.length > 1) {
+                        posLine += ` | 其余${ai.positions.length - 1}笔略`;
+                    }
+                } else {
+                    posLine = '持仓: 无';
                 }
-                
-                // 策略参数（机会成本/时间成本阈值）
-                if (data.ai_logic.strategy_params) {
-                    const sp = data.ai_logic.strategy_params;
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                    html += '<div class="logic-title">风控策略参数：</div>';
-                    html += `<div class="logic-item">机会切换阈值: 反向分数需超过入场阈值 +${Number(sp.opportunity_delta || 0).toFixed(0)}</div>`;
-                    html += `<div class="logic-item">时间成本: 持仓超${Number(sp.max_hold_minutes || 0).toFixed(0)}分 且 盈利低于${Number(sp.min_profit_pct || 0).toFixed(2)}% 则退出</div>`;
-                    html += '</div>';
+
+                addSection('入场/持仓', [entryLine, lastEntryLine, posLine]);
+
+                // 学习/风控（最多3段）
+                let nsLine = '';
+                if (ai.north_star && Object.keys(ai.north_star).length > 0) {
+                    const ns = ai.north_star;
+                    nsLine = `北极星: 胜率${Number(ns.win_rate || 0).toFixed(2)}% 盈亏比${Number(ns.profit_factor || 0).toFixed(2)} 夏普${Number(ns.sharpe_ratio || 0).toFixed(3)} 模式${ns.mode || '-'}`;
                 }
-                
+
+                let tfLine = '';
+                if (ai.tf_weights) {
+                    const tw = ai.tf_weights;
+                    tfLine = `周期权重: 1m${(Number(tw['1m'] || 0) * 100).toFixed(1)}% 15m${(Number(tw['15m'] || 0) * 100).toFixed(1)}% 8h${(Number(tw['8h'] || 0) * 100).toFixed(1)}% 1w${(Number(tw['1w'] || 0) * 100).toFixed(1)}%`;
+                }
+
+                let exitLine = '';
+                if (ai.exit_learner) {
+                    const el = ai.exit_learner;
+                    exitLine = `离场: 快止盈${Number(el.quick_profit_pct || 0.5).toFixed(2)}% 标准${Number(el.normal_profit_pct || 1.0).toFixed(2)}% 最大持仓${Number(el.max_hold_minutes || 60).toFixed(0)}分`;
+                }
+                if (ai.strategy_params) {
+                    const sp = ai.strategy_params;
+                    const riskLine = `风控: 机会阈值+${Number(sp.opportunity_delta || 0).toFixed(0)} 时间成本${Number(sp.max_hold_minutes || 0).toFixed(0)}分/${Number(sp.min_profit_pct || 0).toFixed(2)}%`;
+                    exitLine = exitLine ? `${exitLine} | ${riskLine}` : riskLine;
+                }
                 if (data.learning) {
-                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
-                    html += `<div class="logic-item">学习进度: ${data.learning.total_trades}/${data.learning.min_trades_needed} (${data.learning.progress_percent.toFixed(0)}%)</div>`;
-                    html += `<div class="logic-item">特征优化次数: ${data.learning.weight_adjustments} 次</div>`;
-                    html += '</div>';
+                    const learnLine = `学习: ${data.learning.total_trades}/${data.learning.min_trades_needed} 优化${data.learning.weight_adjustments}次`;
+                    exitLine = exitLine ? `${exitLine} | ${learnLine}` : learnLine;
                 }
-                
+
+                addSection('学习/风控', [nsLine, tfLine, exitLine]);
+
                 container.innerHTML = html;
                 
             } catch (error) {
@@ -1209,10 +1164,10 @@
                     return;
                 }
                 
-                // 反转数组以显示最新的在上面
-                const logs = [...data.logs].reverse();
+                // 最新日志显示在底部（配合 column-reverse）
+                const logs = data.logs.slice(-20).reverse();
                 
-                container.innerHTML = logs.slice(0, 20).map(log => `
+                container.innerHTML = logs.map(log => `
                     <div class="log-item log-level-${log.level}">
                         <span class="log-time">${log.time}</span>
                         <span class="log-message">${log.message}</span>
