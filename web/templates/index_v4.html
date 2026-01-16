@@ -278,11 +278,6 @@
             font-family: 'Consolas', monospace;
         }
 
-        /* 日志从下往上显示 */
-        #logs-container {
-            display: flex;
-            flex-direction: column-reverse;
-        }
         
         .log-time { color: #848e9c; margin-right: 8px; }
         .log-message { color: #e3e6e8; }
@@ -1079,12 +1074,29 @@
 
                 // 入场/持仓（最多3段）
                 const entry = ai.entry || {};
-                const entryLine = `入场分数: 多${Number(entry.long_score || 0).toFixed(0)} 空${Number(entry.short_score || 0).toFixed(0)} 阈值${Number(entry.threshold || 0).toFixed(0)}`;
+                const longScore = Number(entry.long_score || 0);
+                const shortScore = Number(entry.short_score || 0);
+                const thresholdScore = Number(entry.threshold || 0);
+                const bestScore = Math.max(longScore, shortScore);
+                const marketQuality = bestScore >= thresholdScore ? '市场信号偏强' : '市场信号偏弱';
+                const thresholdHint = thresholdScore >= 50 ? '门槛偏高' : '门槛偏低';
+                const entryLine = `入场分数: 多${longScore.toFixed(0)} 空${shortScore.toFixed(0)} 阈值${thresholdScore.toFixed(0)} | ${marketQuality} | ${thresholdHint}`;
                 let lastEntryLine = '';
                 if (entry.last_entry) {
-                    lastEntryLine = `最近入场: ${entry.last_entry.direction || '-'} (${Number(entry.last_entry.strength || 0).toFixed(0)})${entry.last_entry.reason ? ' | 原因: ' + entry.last_entry.reason : ''}`;
+                    const reason = entry.last_entry.reason || '-';
+                    let reasonDetail = '';
+                    if (reason === 'score') {
+                        reasonDetail = '综合分数超过阈值';
+                    } else if (reason === 'breakout') {
+                        reasonDetail = '突破确认触发';
+                    } else {
+                        reasonDetail = reason;
+                    }
+                    const dirLabel = entry.last_entry.direction || '-';
+                    const sideScore = dirLabel === 'LONG' ? longScore : shortScore;
+                    lastEntryLine = `最近入场: ${dirLabel} (${Number(entry.last_entry.strength || 0).toFixed(0)}) | 原因: ${reasonDetail} | 分数${sideScore.toFixed(0)}/阈值${thresholdScore.toFixed(0)}`;
                 } else {
-                    lastEntryLine = '最近入场: -';
+                    lastEntryLine = '最近入场: - | 原因: -';
                 }
 
                 let posLine = '';
@@ -1127,6 +1139,7 @@
                     tfLine = `周期权重: 1m${(Number(tw['1m'] || 0) * 100).toFixed(1)}% 15m${(Number(tw['15m'] || 0) * 100).toFixed(1)}% 8h${(Number(tw['8h'] || 0) * 100).toFixed(1)}% 1w${(Number(tw['1w'] || 0) * 100).toFixed(1)}%`;
                 }
 
+                let targetLine = '目标: 盈亏比>1.2 夏普>1.0 (稳健) | 进阶目标: 盈亏比>1.5 夏普>1.5';
                 let exitLine = '';
                 if (ai.exit_learner) {
                     const el = ai.exit_learner;
@@ -1142,7 +1155,7 @@
                     exitLine = exitLine ? `${exitLine} | ${learnLine}` : learnLine;
                 }
 
-                addSection('学习/风控', [nsLine, tfLine, exitLine]);
+                addSection('学习/风控', [nsLine, targetLine, exitLine]);
 
                 container.innerHTML = html;
                 
@@ -1164,10 +1177,10 @@
                     return;
                 }
                 
-                // 最新日志显示在底部（配合 column-reverse）
-                const logs = data.logs.slice(-20).reverse();
+                // 最新日志显示在最上面
+                const logs = [...data.logs].reverse();
                 
-                container.innerHTML = logs.map(log => `
+                container.innerHTML = logs.slice(0, 20).map(log => `
                     <div class="log-item log-level-${log.level}">
                         <span class="log-time">${log.time}</span>
                         <span class="log-message">${log.message}</span>

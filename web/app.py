@@ -389,6 +389,26 @@ def positions():
             2. AI > Exchange: Remove excess AI entries (orphaned records)
             """
             updated = False
+            if not active_positions:
+                if agent_positions_list:
+                    agent_positions_list.clear()
+                    updated = True
+                    add_log("同步清理: 交易所无持仓，已清空AI开仓明细", "WARNING")
+                if updated:
+                    if agent_obj and getattr(agent_obj, "positions", None) is not None:
+                        agent_obj.positions = []
+                        try:
+                            agent_obj._save_positions()
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
+                            with open(pos_file, "w", encoding="utf-8") as f:
+                                json.dump({"positions": []}, f, indent=2)
+                        except Exception:
+                            pass
+                return agent_positions_list
             
             # Calculate exchange totals by direction
             exchange_long_qty = 0.0
