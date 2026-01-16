@@ -1,0 +1,119 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 环境变量和配置（包含敏感信息）
+.env
+.env.local
+.env.*.local
+config.json
+
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+trades.db
+web/trading.db
+rl_data/trades.db
+
+# 训练数据和模型（可能很大）
+rl_data/*.pkl
+rl_data/*.json
+rl_data/*.db
+!rl_data/.gitkeep
+
+# CSV数据文件（可能很大）
+*.csv
+!requirements.txt
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# 系统文件
+Thumbs.db
+desktop.ini
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# 测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 模型检查点（可选，如果不想上传训练好的模型）
+# rl_data/best_model.pkl
+# rl_data/checkpoint.pkl
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

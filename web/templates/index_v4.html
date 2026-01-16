@@ -1,0 +1,1374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BTC Trading System v4.0</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Consolas', 'Monaco', monospace; 
+            background: #0a0e11; 
+            color: #e3e6e8; 
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        
+        .header {
+            background: #1a1d23;
+            border-bottom: 1px solid #2b3139;
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #f0b90b;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .current-time {
+            font-size: 11px;
+            color: #848e9c;
+            font-weight: 400;
+        }
+        .header-stats {
+            display: flex;
+            gap: 20px;
+            font-size: 11px;
+        }
+        
+        .header-stat {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+        }
+        
+        .stat-label { color: #848e9c; }
+        .stat-value.positive { color: #02c076; }
+        .stat-value.negative { color: #f6465d; }
+        
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr 350px;
+            grid-template-rows: 320px 320px 1fr;
+            gap: 8px;
+            padding: 8px;
+            height: calc(100vh - 60px);
+        }
+        
+        /* K线图 */
+        .chart-card {
+            background: #1a1d23;
+            border: 1px solid #2b3139;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .chart-header {
+            background: #1e2329;
+            padding: 8px 12px;
+            border-bottom: 1px solid #2b3139;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .chart-title { font-weight: 600; font-size: 11px; color: #e3e6e8; }
+        .chart-price { 
+            font-size: 13px; 
+            font-weight: 700; 
+            font-family: 'Consolas', monospace;
+        }
+        .chart-price.up { color: #02c076; }
+        .chart-price.down { color: #f6465d; }
+        
+        .chart-body { flex: 1; position: relative; }
+        .chart-levels {
+            position: absolute;
+            bottom: 4px;
+            left: 4px;
+            font-size: 10px;
+            background: rgba(26, 29, 35, 0.9);
+            padding: 4px 6px;
+            border-radius: 2px;
+            line-height: 1.3;
+        }
+        
+        /* 右侧面板 */
+        .right-panel {
+            grid-column: 3;
+            grid-row: 1 / span 3;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .card {
+            background: #1a1d23;
+            border: 1px solid #2b3139;
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .card-header {
+            background: #1e2329;
+            padding: 8px 12px;
+            border-bottom: 1px solid #2b3139;
+            font-weight: 600;
+            font-size: 11px;
+        }
+
+        .card-header.clickable {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .collapse-indicator {
+            float: right;
+            color: #848e9c;
+            font-size: 11px;
+        }
+
+        .collapsed .card-body {
+            display: none;
+        }
+
+        .weight-delta {
+            width: 70px;
+            text-align: right;
+            font-size: 11px;
+        }
+
+        .weight-delta.up {
+            color: #02c076;
+        }
+
+        .weight-delta.down {
+            color: #f6465d;
+        }
+
+        .weight-delta.flat {
+            color: #848e9c;
+        }
+        
+        .card-body {
+            padding: 10px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        
+        /* 持仓信息 */
+        .position-item {
+            background: #252930;
+            padding: 8px;
+            border-radius: 3px;
+            margin-bottom: 6px;
+            font-size: 10px;
+        }
+        
+        .position-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+            font-weight: 600;
+        }
+        
+        .position-side-long { color: #02c076; }
+        .position-side-short { color: #f6465d; }
+        
+        .position-details {
+            color: #848e9c;
+            line-height: 1.5;
+        }
+        
+        .position-pnl {
+            margin-top: 4px;
+            font-weight: 600;
+        }
+        
+        .position-actions {
+            margin-top: 6px;
+            display: flex;
+            gap: 4px;
+        }
+        
+        /* AI决策逻辑 */
+        .logic-section {
+            margin-bottom: 10px;
+        }
+        
+        .logic-title {
+            color: #f0b90b;
+            font-weight: 600;
+            margin-bottom: 4px;
+            font-size: 10px;
+        }
+        
+        .logic-item {
+            color: #848e9c;
+            margin-left: 8px;
+            margin-bottom: 2px;
+            font-size: 10px;
+            line-height: 1.4;
+        }
+        
+        .logic-conclusion {
+            color: #e3e6e8;
+            font-weight: 600;
+            margin-top: 6px;
+            font-size: 10px;
+        }
+        
+        /* 底部区域 */
+        .bottom-panel {
+            grid-column: 1 / span 2;
+            grid-row: 3;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        
+        /* 交易日志 */
+        .log-item {
+            padding: 4px 8px;
+            border-bottom: 1px solid #252930;
+            font-size: 10px;
+            font-family: 'Consolas', monospace;
+        }
+        
+        .log-time { color: #848e9c; margin-right: 8px; }
+        .log-message { color: #e3e6e8; }
+        
+        .log-level-INFO { border-left: 2px solid #848e9c; }
+        .log-level-SUCCESS { border-left: 2px solid #02c076; }
+        .log-level-WARNING { border-left: 2px solid #f0b90b; }
+        .log-level-ERROR { border-left: 2px solid #f6465d; }
+        
+        /* 交易历史 */
+        .trade-item {
+            padding: 6px 8px;
+            border-bottom: 1px solid #252930;
+            font-size: 10px;
+        }
+        
+        .trade-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 3px;
+        }
+        
+        .trade-id { color: #848e9c; font-family: 'Consolas', monospace; }
+        .trade-direction-LONG { color: #02c076; font-weight: 600; }
+        .trade-direction-SHORT { color: #f6465d; font-weight: 600; }
+        
+        .trade-details { color: #848e9c; line-height: 1.4; }
+        .trade-pnl { font-weight: 600; }
+        .trade-pnl.positive { color: #02c076; }
+        .trade-pnl.negative { color: #f6465d; }
+        
+        /* 按钮 */
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 10px;
+            font-weight: 600;
+            transition: opacity 0.2s;
+        }
+        
+        .btn:hover { opacity: 0.8; }
+        
+        .btn-primary { background: #f0b90b; color: #0b0e11; }
+        .btn-success { background: #02c076; color: white; }
+        .btn-danger { background: #f6465d; color: white; }
+        .btn-secondary { background: #2b3139; color: #e3e6e8; }
+        .btn-small { padding: 4px 8px; font-size: 9px; }
+        
+        /* 状态指示器 */
+        .status-indicator {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        
+        .status-running { background: #02c076; }
+        .status-stopped { background: #848e9c; }
+        
+        /* 无数据提示 */
+        .no-data {
+            color: #848e9c;
+            text-align: center;
+            padding: 20px;
+            font-size: 10px;
+        }
+        
+        /* 滚动条样式 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #1a1d23; }
+        ::-webkit-scrollbar-thumb { background: #2b3139; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3c4043; }
+    </style>
+</head>
+<body>
+    <!-- 头部 -->
+    <div class="header">
+        <div class="header-title">
+            <span>BTC Trading System v4.0</span>
+            <span class="current-time" id="current-time">Loading...</span>
+        </div>
+        
+        <!-- Agent控制按钮 -->
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <button class="btn btn-success" id="btn-start-agent" onclick="startAgent()" style="display: none;">
+                Start Agent
+            </button>
+            <button class="btn btn-danger" id="btn-stop-agent" onclick="stopAgent()" style="display: none;">
+                Stop Agent
+            </button>
+            <div class="header-stat">
+                <span class="stat-label">Agent Status</span>
+                <span class="stat-value" id="agent-status">
+                    <span class="status-indicator status-stopped"></span>Stopped
+                </span>
+            </div>
+        </div>
+        
+        <div class="header-stats">
+            <div class="header-stat">
+                <span class="stat-label">API Status</span>
+                <span class="stat-value" id="api-status">
+                    <span class="status-indicator status-stopped"></span>Disconnected
+                </span>
+            </div>
+            <div class="header-stat">
+                <span class="stat-label">Balance</span>
+                <span class="stat-value" id="balance">$0.00</span>
+            </div>
+            <div class="header-stat">
+                <span class="stat-label">Unrealized PnL</span>
+                <span class="stat-value" id="unrealized-pnl">$0.00</span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 主容器 -->
+    <div class="container">
+        <!-- K线图 - 1m -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">1m Chart (BTCUSDT)</span>
+                <span class="chart-price up" id="price-1m">$0.00</span>
+            </div>
+            <div class="chart-body" id="chart-1m">
+                <div class="chart-levels" id="levels-1m"></div>
+            </div>
+        </div>
+        
+        <!-- K线图 - 15m -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">15m Chart (BTCUSDT)</span>
+                <span class="chart-price up" id="price-15m">$0.00</span>
+            </div>
+            <div class="chart-body" id="chart-15m">
+                <div class="chart-levels" id="levels-15m"></div>
+            </div>
+        </div>
+        
+        <!-- 右侧面板 -->
+        <div class="right-panel">
+            <!-- 持仓信息 -->
+            <div class="card" style="min-height: 200px;">
+                <div class="card-header">
+                    持仓与账户
+                    <button class="btn btn-danger btn-small" onclick="closeAllPositions()" style="float: right; margin-top: -2px;">一键清仓</button>
+                </div>
+                <div class="card-body" id="positions-container">
+                    <div class="no-data">暂无持仓</div>
+                </div>
+            </div>
+            
+            <!-- AI决策逻辑 -->
+            <div class="card" style="flex: 1;">
+                <div class="card-header">AI 决策逻辑</div>
+                <div class="card-body" id="ai-logic">
+                    <div class="no-data">等待分析...</div>
+                </div>
+            </div>
+            
+            <!-- 特征权重 -->
+            <div class="card collapsed" id="weights-card" style="min-height: 220px;">
+                <div class="card-header clickable" onclick="toggleWeightsCard()">
+                    特征权重（支撑/阻力）
+                    <span class="collapse-indicator" id="weights-toggle-text">点击展开</span>
+                </div>
+                <div class="card-body" id="weights-container">
+                    <div class="no-data">暂无权重</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- K线图 - 8h -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">8h Chart (BTCUSDT)</span>
+                <span class="chart-price up" id="price-8h">$0.00</span>
+            </div>
+            <div class="chart-body" id="chart-8h"></div>
+        </div>
+        
+        <!-- K线图 - 1w -->
+        <div class="chart-card">
+            <div class="chart-header">
+                <span class="chart-title">1w Chart (BTCUSDT)</span>
+                <span class="chart-price up" id="price-1w">$0.00</span>
+            </div>
+            <div class="chart-body" id="chart-1w"></div>
+        </div>
+        
+        <!-- 底部面板 -->
+        <div class="bottom-panel">
+            <!-- 交易日志 -->
+            <div class="card">
+                <div class="card-header">交易日志（实时）</div>
+                <div class="card-body" id="logs-container" style="max-height: 300px; overflow-y: auto;">
+                    <div class="no-data">暂无日志</div>
+                </div>
+            </div>
+            
+            <!-- 交易历史 -->
+            <div class="card">
+                <div class="card-header">交易历史（最近10笔）</div>
+                <div class="card-body" id="trades-container" style="max-height: 300px; overflow-y: auto;">
+                    <div class="no-data">暂无交易</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // 全局变量
+        const charts = {};
+        const candlestickSeries = {};
+        const volumeSeries = {};
+        const supportLines = {};
+        const resistanceLines = {};
+        const tradeMarkers = {};
+        
+        // 初始化图表
+        function initCharts() {
+            const intervals = ['1m', '15m', '8h', '1w'];
+            
+            intervals.forEach(interval => {
+                const container = document.getElementById(`chart-${interval}`);
+                
+                // 创建图表
+                const chart = LightweightCharts.createChart(container, {
+                    width: container.clientWidth,
+                    height: container.clientHeight,
+                    layout: {
+                        background: { color: '#1a1d23' },
+                        textColor: '#848e9c',
+                    },
+                    grid: {
+                        vertLines: { color: '#252930' },
+                        horzLines: { color: '#252930' },
+                    },
+                    timeScale: {
+                        borderColor: '#2b3139',
+                        timeVisible: true,
+                        secondsVisible: false,
+                        // 让 Lightweight Charts 自动根据缩放级别调整时间刻度
+                    },
+                    rightPriceScale: {
+                        borderColor: '#2b3139',
+                    },
+                    localization: {
+                        // 使用中文日期格式
+                        locale: 'zh-CN',
+                        // 时间格式化
+                        timeFormatter: (time) => {
+                            const date = new Date(time * 1000);
+                            const hours = date.getUTCHours().toString().padStart(2, '0');
+                            const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+                            return `${hours}:${minutes}`;
+                        },
+                    },
+                });
+                
+                // 添加K线系列
+                const candlestick = chart.addCandlestickSeries({
+                    upColor: '#02c076',
+                    downColor: '#f6465d',
+                    borderUpColor: '#02c076',
+                    borderDownColor: '#f6465d',
+                    wickUpColor: '#02c076',
+                    wickDownColor: '#f6465d',
+                });
+                
+                charts[interval] = chart;
+                candlestickSeries[interval] = candlestick;
+                
+                // 初始化支撑阻力线数组（只for 1m和15m）
+                if (interval === '1m' || interval === '15m') {
+                    supportLines[interval] = [];
+                    resistanceLines[interval] = [];
+                }
+            });
+            
+            // 响应式调整
+            window.addEventListener('resize', () => {
+                intervals.forEach(interval => {
+                    const container = document.getElementById(`chart-${interval}`);
+                    charts[interval].resize(container.clientWidth, container.clientHeight);
+                });
+            });
+        }
+        
+        // 更新K线数据
+        async function updateKlines() {
+            try {
+                const response = await fetch('/api/klines_all/BTCUSDT');
+                const data = await response.json();
+                
+                // 时区偏移：上海时间 UTC+8 = 8小时 = 28800秒
+                const SHANGHAI_OFFSET = 8 * 3600;
+                
+                Object.keys(data).forEach(interval => {
+                    const klineData = data[interval];
+                    
+                    if (klineData && klineData.candles) {
+                        // 转换时间为上海时区（UTC+8）
+                        const candlesWithLocalTime = klineData.candles.map(candle => ({
+                            time: candle.time + SHANGHAI_OFFSET,
+                            open: candle.open,
+                            high: candle.high,
+                            low: candle.low,
+                            close: candle.close
+                        }));
+                        
+                        // 更新K线
+                        candlestickSeries[interval].setData(candlesWithLocalTime);
+                        
+                        // 更新价格显示
+                        const lastCandle = klineData.candles[klineData.candles.length - 1];
+                        const priceEl = document.getElementById(`price-${interval}`);
+                        if (priceEl && lastCandle) {
+                            const price = lastCandle.close;
+                            priceEl.textContent = `$${price.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+                            priceEl.className = lastCandle.close >= lastCandle.open ? 'chart-price up' : 'chart-price down';
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Failed to update klines:', error);
+            }
+        }
+        
+        // 更新支撑阻力位
+        async function updateSupportResistance() {
+            try {
+                const response = await fetch('/api/agent/levels');
+                const data = await response.json();
+                
+                // 只为1m和15m更新支撑阻力位显示和绘制线条
+                ['1m', '15m'].forEach(interval => {
+                    // 更新文字显示
+                    const levelsEl = document.getElementById(`levels-${interval}`);
+                    if (levelsEl) {
+                        let html = '';
+                        if (data.best_support) {
+                            html += `<div style="color: #02c076;">S: ${data.best_support.price.toFixed(0)} (${data.best_support.score.toFixed(0)}pts)</div>`;
+                        }
+                        if (data.best_resistance) {
+                            html += `<div style="color: #f6465d;">R: ${data.best_resistance.price.toFixed(0)} (${data.best_resistance.score.toFixed(0)}pts)</div>`;
+                        }
+                        levelsEl.innerHTML = html;
+                    }
+                    
+                    // 在图表上绘制线条
+                    const series = candlestickSeries[interval];
+                    if (series) {
+                        // 移除旧的线条
+                        if (supportLines[interval]) {
+                            supportLines[interval].forEach(line => series.removePriceLine(line));
+                        }
+                        if (resistanceLines[interval]) {
+                            resistanceLines[interval].forEach(line => series.removePriceLine(line));
+                        }
+                        
+                        supportLines[interval] = [];
+                        resistanceLines[interval] = [];
+                        
+                        // 绘制支撑位
+                        if (data.best_support) {
+                            const supportLine = series.createPriceLine({
+                                price: data.best_support.price,
+                                color: '#02c076',
+                                lineWidth: 2,
+                                lineStyle: 2, // Dashed
+                                axisLabelVisible: true,
+                                title: `S: ${data.best_support.price.toFixed(0)}`,
+                            });
+                            supportLines[interval].push(supportLine);
+                        }
+                        
+                        // 绘制阻力位
+                        if (data.best_resistance) {
+                            const resistanceLine = series.createPriceLine({
+                                price: data.best_resistance.price,
+                                color: '#f6465d',
+                                lineWidth: 2,
+                                lineStyle: 2, // Dashed
+                                axisLabelVisible: true,
+                                title: `R: ${data.best_resistance.price.toFixed(0)}`,
+                            });
+                            resistanceLines[interval].push(resistanceLine);
+                        }
+                    }
+                });
+                
+                // 更新特征权重显示
+                renderFeatureWeights(data);
+            } catch (error) {
+                console.error('Failed to update S/R levels:', error);
+            }
+        }
+
+        // 特征权重折叠控制
+        function toggleWeightsCard() {
+            const card = document.getElementById('weights-card');
+            const text = document.getElementById('weights-toggle-text');
+            if (!card || !text) return;
+            const collapsed = card.classList.toggle('collapsed');
+            text.textContent = collapsed ? '点击展开' : '点击收起';
+            try {
+                localStorage.setItem('weightsCardCollapsed', collapsed ? '1' : '0');
+            } catch (error) {
+                // ignore
+            }
+        }
+
+        function initWeightsCard() {
+            const card = document.getElementById('weights-card');
+            const text = document.getElementById('weights-toggle-text');
+            if (!card || !text) return;
+            let collapsed = true;
+            try {
+                collapsed = localStorage.getItem('weightsCardCollapsed') !== '0';
+            } catch (error) {
+                collapsed = true;
+            }
+            if (collapsed) {
+                card.classList.add('collapsed');
+                text.textContent = '点击展开';
+            } else {
+                card.classList.remove('collapsed');
+                text.textContent = '点击收起';
+            }
+        }
+
+        // 渲染特征权重
+        function renderFeatureWeights(data) {
+            const container = document.getElementById('weights-container');
+            if (!container) return;
+            
+            const weights = data && data.weights_display ? data.weights_display : [];
+            if (!weights || weights.length === 0) {
+                container.innerHTML = '<div class="no-data">暂无权重</div>';
+                return;
+            }
+            
+            const sorted = weights.slice().sort((a, b) => b.weight - a.weight);
+            const prevMap = window.__lastWeights || {};
+            let html = '';
+            
+            if (data.learning) {
+                const total = data.learning.total_trades || 0;
+                const effective = data.learning.effective_trades || 0;
+                const effectRate = total > 0 ? (effective / total * 100).toFixed(1) : 0;
+                const adjustments = data.learning.weight_adjustments || 0;
+                const canAdjust = data.learning.can_adjust || false;
+                html += `<div style="margin-bottom: 8px; color: #848e9c;">
+                    交易数：${total} | 有效率：${effectRate}% | 权重优化：${adjustments}次
+                </div>`;
+                if (!canAdjust) {
+                    const minTrades = data.learning.min_trades_needed || 30;
+                    html += `<div style="margin-bottom: 8px; color: #f0b90b;">
+                        学习准备中：${total}/${minTrades}（${((total/minTrades)*100).toFixed(0)}%）
+                    </div>`;
+                } else {
+                    html += `<div style="margin-bottom: 8px; color: #02c076;">
+                        持续学习中 ✓
+                    </div>`;
+                }
+            }
+            
+            sorted.forEach(item => {
+                const pct = Number(item.weight || 0);
+                const pctText = pct.toFixed(1);
+                const prev = prevMap[item.name];
+                const delta = prev == null ? null : pct - prev;
+                const deltaText = delta == null ? '--' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`;
+                const deltaClass = delta == null ? 'flat' : (delta > 0 ? 'up' : (delta < 0 ? 'down' : 'flat'));
+                html += `
+                    <div style="display: flex; align-items: center; margin-bottom: 6px;">
+                        <div style="flex: 1; color: #eaecef;">${item.name}</div>
+                        <div style="width: 60px; text-align: right; color: #f0b90b;">${pctText}%</div>
+                        <div class="weight-delta ${deltaClass}">${deltaText}</div>
+                    </div>
+                `;
+            });
+
+            const renderBreakdown = (title, breakdown) => {
+                if (!breakdown || breakdown.length === 0) return '';
+                let block = `<div style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">`;
+                block += `<div style="color:#848e9c; margin-bottom:6px;">${title}</div>`;
+                breakdown.slice(0, 6).forEach(item => {
+                    const valuePct = (Number(item.value || 0) * 100).toFixed(1);
+                    const contribPct = Number(item.contribution_pct || 0).toFixed(1);
+                    block += `
+                        <div style="display:flex; align-items:center; margin-bottom:4px;">
+                            <div style="flex:1; color:#eaecef;">${item.name}</div>
+                            <div style="width:70px; text-align:right; color:#8a9;">${valuePct}%</div>
+                            <div style="width:60px; text-align:right; color:#f0b90b;">${contribPct}%</div>
+                        </div>
+                    `;
+                });
+                block += '</div>';
+                return block;
+            };
+
+            
+            container.innerHTML = html;
+            window.__lastWeights = sorted.reduce((acc, item) => {
+                acc[item.name] = Number(item.weight || 0);
+                return acc;
+            }, {});
+        }
+        
+        // 更新交易标记
+        async function updateTradeMarkers() {
+            try {
+                const response = await fetch('/api/agent/trades');
+                const data = await response.json();
+                
+                if (!data.trades || data.trades.length === 0) {
+                    return;
+                }
+                
+                // K线时间 = UTC时间戳 + 8小时，且是每分钟的开盘时间（整分钟）
+                // 交易时间 = 本地ISO字符串（上海时间），需要向下取整到分钟
+                const SHANGHAI_OFFSET = 8 * 3600;
+                const toChartTime = (ts) => {
+                    if (!ts) return null;
+                    const d = new Date(ts);
+                    const utcSeconds = Math.floor(d.getTime() / 1000);
+                    // 向下取整到分钟（60秒）
+                    const minuteAligned = Math.floor(utcSeconds / 60) * 60;
+                    // 加8小时偏移（与K线一致）
+                    return minuteAligned + SHANGHAI_OFFSET;
+                };
+                
+                // 只为1m和15m添加交易标记
+                ['1m', '15m'].forEach(interval => {
+                    const series = candlestickSeries[interval];
+                    if (!series) return;
+                    
+                    const markers = [];
+                    
+                    // 优先包含当前持仓的交易标记
+                    const activeTrades = data.trades.filter(t => !t.exit_time);
+                    const closedTrades = data.trades.filter(t => t.exit_time);
+                    const tradesForMarkers = [...activeTrades, ...closedTrades].slice(0, 80);
+
+                    tradesForMarkers.forEach(trade => {
+                        // 入场标记: L=Long(做多), S=Short(做空) - 小箭头
+                        if (trade.entry_time) {
+                            const entryTime = toChartTime(trade.entry_time);
+                            if (!entryTime) return;
+                            markers.push({
+                                time: entryTime,
+                                position: trade.direction === 'LONG' ? 'belowBar' : 'aboveBar',
+                                color: trade.direction === 'LONG' ? '#02c076' : '#f6465d',
+                                shape: trade.direction === 'LONG' ? 'arrowUp' : 'arrowDown',
+                                text: trade.direction === 'LONG' ? 'L' : 'S',
+                                size: 0,
+                            });
+                        }
+                        
+                        // 出场标记: CL=Close Long(平多), CS=Close Short(平空) - 小箭头
+                        if (trade.exit_time && trade.exit_price) {
+                            const exitTime = toChartTime(trade.exit_time);
+                            if (!exitTime) return;
+                            const isProfitable = trade.pnl >= 0;
+                            markers.push({
+                                time: exitTime,
+                                position: trade.direction === 'LONG' ? 'aboveBar' : 'belowBar',
+                                color: isProfitable ? '#f0b90b' : '#848e9c',
+                                shape: trade.direction === 'LONG' ? 'arrowDown' : 'arrowUp',
+                                text: trade.direction === 'LONG' ? 'CL' : 'CS',
+                                size: 0,
+                            });
+                        }
+                    });
+                    
+                    // 按时间升序排列（Lightweight Charts 要求）
+                    markers.sort((a, b) => a.time - b.time);
+                    
+                    // 设置标记
+                    if (markers.length > 0) {
+                        console.log(`Setting ${markers.length} markers for ${interval}, first:`, markers[0], 'last:', markers[markers.length-1]);
+                    }
+                    series.setMarkers(markers);
+                });
+                
+            } catch (error) {
+                console.error('Failed to update trade markers:', error);
+            }
+        }
+        
+        // 更新持仓信息
+        async function updatePositions() {
+            try {
+                const [accountResp, positionsResp] = await Promise.all([
+                    fetch('/api/account'),
+                    fetch('/api/positions')
+                ]);
+                
+                // 更新账户余额
+                const accountData = await accountResp.json();
+                if (accountData.balances && accountData.balances.length > 0) {
+                    const usdtBalance = accountData.balances.find(b => b.asset === 'USDT');
+                    if (usdtBalance) {
+                        document.getElementById('balance').textContent = `$${usdtBalance.total.toLocaleString('en-US', {minimumFractionDigits: 2})}`;
+                    }
+                }
+                
+                // 更新持仓
+                const positionsData = await positionsResp.json();
+                const container = document.getElementById('positions-container');
+                
+                const exchangePositions = positionsData.positions || [];
+                const agentEntries = positionsData.agent_entries || [];
+                
+                if (exchangePositions.length === 0 && agentEntries.length === 0) {
+                    container.innerHTML = '<div class="no-data">暂无持仓</div>';
+                    document.getElementById('unrealized-pnl').textContent = '$0.00';
+                    document.getElementById('unrealized-pnl').className = 'stat-value';
+                    return;
+                }
+                
+                // 计算总未实现盈亏
+                const totalPnl = exchangePositions.reduce((sum, p) => sum + p.pnl, 0);
+                const pnlEl = document.getElementById('unrealized-pnl');
+                pnlEl.textContent = `$${totalPnl.toLocaleString('en-US', {minimumFractionDigits: 2, signDisplay: 'always'})}`;
+                pnlEl.className = totalPnl >= 0 ? 'stat-value positive' : 'stat-value negative';
+                
+                const formatTime = (ts) => {
+                    if (!ts) return '--';
+                    const dt = new Date(ts);
+                    if (isNaN(dt.getTime())) return ts;
+                    return dt.toLocaleString('zh-CN', { hour12: false });
+                };
+                let html = '';
+                
+                if (exchangePositions.length > 0) {
+                    html += '<div style="margin-bottom: 10px; color: #848e9c;">交易所持仓</div>';
+                    html += exchangePositions.map(pos => `
+                        <div class="position-item">
+                            <div class="position-header">
+                                <span class="position-side-${pos.side.toLowerCase()}">${pos.side === 'LONG' ? '多' : '空'}</span>
+                                <span>${pos.symbol}</span>
+                                ${pos.tradeId ? `<span style="color:#6c757d;">${pos.tradeId.slice(0,8)}</span>` : ''}
+                            </div>
+                            <div class="position-details">
+                                开仓价: $${pos.entryPrice.toFixed(2)} | 当前价: $${pos.markPrice.toFixed(2)}<br>
+                                数量: ${pos.amount.toFixed(4)} BTC | 杠杆: ${pos.leverage}x<br>
+                                止损: $${(pos.stopLoss || 0).toFixed(2)} | 止盈: $${(pos.takeProfit || 0).toFixed(2)}<br>
+                                强平: $${(pos.liquidationPrice || 0).toFixed(2)}
+                            </div>
+                            <div class="position-pnl ${pos.pnl >= 0 ? 'positive' : 'negative'}">
+                                盈亏: $${pos.pnl >= 0 ? '+' : ''}${pos.pnl.toFixed(2)} (${pos.pnlPercent >= 0 ? '+' : ''}${pos.pnlPercent.toFixed(2)}%)
+                            </div>
+                            <div class="position-actions">
+                                <button class="btn btn-danger btn-small" onclick="closePosition('${pos.tradeId}', '${pos.symbol}', '${pos.side}', ${pos.amount}, ${pos.entryPrice}, ${pos.leverage})">平仓</button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+                if (agentEntries.length > 0) {
+                    const summary = positionsData.summary || {};
+                    if (summary.exchange_qty != null && summary.agent_qty != null) {
+                        const diffText = `${summary.qty_diff >= 0 ? '+' : ''}${Number(summary.qty_diff || 0).toFixed(4)}`;
+                        const pctText = `${summary.pct_diff >= 0 ? '+' : ''}${Number(summary.pct_diff || 0).toFixed(2)}%`;
+                        const warn = summary.has_mismatch ? 'color:#f0b90b;' : 'color:#848e9c;';
+                        html += `
+                            <div style="margin: 8px 0 6px; ${warn}">
+                                交易所持仓总量: ${Number(summary.exchange_qty || 0).toFixed(4)} BTC | 
+                                AI开仓总量: ${Number(summary.agent_qty || 0).toFixed(4)} BTC | 
+                                差值: ${diffText} BTC (${pctText})
+                            </div>
+                        `;
+                        if (summary.has_mismatch && summary.note) {
+                            html += `<div style="margin: 0 0 6px; color:#f0b90b;">${summary.note}</div>`;
+                        }
+                    }
+                    html += '<div style="margin: 6px 0 6px; color: #848e9c;">AI 开仓明细（分批）</div>';
+                    html += agentEntries.map(pos => `
+                        <div class="position-item">
+                            <div class="position-header">
+                                <span class="position-side-${(pos.side || '').toLowerCase()}">${pos.side === 'LONG' ? '多' : '空'}</span>
+                                <span>BTCUSDT</span>
+                                ${pos.tradeId ? `<span style="color:#6c757d;">${pos.tradeId.slice(0,8)}</span>` : ''}
+                            </div>
+                            <div class="position-details">
+                                开仓价: $${pos.entryPrice.toFixed(2)} | 当前价: $${pos.markPrice.toFixed(2)}<br>
+                                数量: ${pos.amount.toFixed(4)} BTC | 杠杆: ${pos.leverage}x<br>
+                                止损: $${(pos.stopLoss || 0).toFixed(2)} | 止盈: $${(pos.takeProfit || 0).toFixed(2)}<br>
+                                强平: ${pos.liquidationPrice ? `$${pos.liquidationPrice.toFixed(2)}` : '--'}<br>
+                                开仓时间: ${formatTime(pos.timestampOpen)}
+                            </div>
+                            <div class="position-pnl ${pos.pnl >= 0 ? 'positive' : 'negative'}">
+                            盈亏: $${pos.pnl >= 0 ? '+' : ''}${pos.pnl.toFixed(2)} (${pos.pnlPercent >= 0 ? '+' : ''}${pos.pnlPercent.toFixed(2)}%)
+                            </div>
+                        </div>
+                    `).join('');
+                }
+                
+                container.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Failed to update positions:', error);
+            }
+        }
+        
+        // 更新AI决策逻辑
+        async function updateAILogic() {
+            try {
+                const response = await fetch('/api/agent/status');
+                const data = await response.json();
+                
+                const container = document.getElementById('ai-logic');
+                
+                if (!data.running) {
+                    container.innerHTML = '<div class="no-data">Agent未运行</div>';
+                    return;
+                }
+                
+                if (!data.ai_logic) {
+                    container.innerHTML = '<div class="no-data">AI逻辑不可用</div>';
+                    return;
+                }
+                
+                const exitReasonMap = {
+                    STOP_LOSS: '止损触发',
+                    TAKE_PROFIT: '止盈触发',
+                    MAX_LOSS: '最大亏损触发',
+                    TIME_COST: '时间成本',
+                    OPPORTUNITY_SWITCH: '机会切换',
+                    PROFIT_LOCK: '利润锁定',
+                };
+                
+                let html = '';
+                html += '<div class="logic-section">';
+                html += '<div class="logic-title">因为：</div>';
+                data.ai_logic.because.forEach(item => {
+                    html += `<div class="logic-item">${item}</div>`;
+                });
+                html += '</div>';
+                
+                html += '<div class="logic-section">';
+                html += '<div class="logic-title">所以：</div>';
+                data.ai_logic.therefore.forEach(item => {
+                    html += `<div class="logic-item">${item}</div>`;
+                });
+                html += '</div>';
+                
+                html += `<div class="logic-conclusion">结论：${data.ai_logic.conclusion}</div>`;
+                
+                if (data.ai_logic.entry) {
+                    const entry = data.ai_logic.entry;
+                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
+                    html += '<div class="logic-title">入场评分：</div>';
+                    html += `<div class="logic-item">多头分数: ${Number(entry.long_score || 0).toFixed(0)}</div>`;
+                    html += `<div class="logic-item">空头分数: ${Number(entry.short_score || 0).toFixed(0)}</div>`;
+                    html += `<div class="logic-item">阈值: ${Number(entry.threshold || 0).toFixed(0)}</div>`;
+                    if (entry.last_entry) {
+                        html += `<div class="logic-item">最近入场: ${entry.last_entry.direction || ''} (${Number(entry.last_entry.strength || 0).toFixed(0)})</div>`;
+                        if (entry.last_entry.reason) {
+                            html += `<div class="logic-item">入场原因: ${entry.last_entry.reason}</div>`;
+                        }
+                    }
+                    html += '</div>';
+                }
+
+                if (data.ai_logic.north_star && Object.keys(data.ai_logic.north_star).length > 0) {
+                    const ns = data.ai_logic.north_star;
+                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
+                    html += '<div class="logic-title">北极星指标：</div>';
+                    html += `<div class="logic-item">胜率: ${Number(ns.win_rate || 0).toFixed(2)}%</div>`;
+                    html += `<div class="logic-item">盈亏比: ${Number(ns.profit_factor || 0).toFixed(2)}</div>`;
+                    html += `<div class="logic-item">夏普: ${Number(ns.sharpe_ratio || 0).toFixed(3)}</div>`;
+                    html += `<div class="logic-item">综合评分: ${Number(ns.score || 0).toFixed(1)} | 模式: ${ns.mode || '-'}</div>`;
+                    if (ns.aggressive_delta) {
+                        html += `<div class="logic-item">探索加速: -${Number(ns.aggressive_delta || 0).toFixed(0)} 阈值</div>`;
+                    }
+                    html += '</div>';
+                }
+
+                if (data.ai_logic.tf_weights) {
+                    const tw = data.ai_logic.tf_weights;
+                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
+                    html += '<div class="logic-title">本次周期权重：</div>';
+                    html += `<div class="logic-item">1m: ${(Number(tw['1m'] || 0) * 100).toFixed(1)}% | 15m: ${(Number(tw['15m'] || 0) * 100).toFixed(1)}%</div>`;
+                    html += `<div class="logic-item">8h: ${(Number(tw['8h'] || 0) * 100).toFixed(1)}% | 1w: ${(Number(tw['1w'] || 0) * 100).toFixed(1)}%</div>`;
+                    html += '</div>';
+                }
+                
+                if (data.ai_logic.positions && data.ai_logic.positions.length > 0) {
+                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
+                    html += '<div class="logic-title">持仓/出场逻辑：</div>';
+                    data.ai_logic.positions.forEach(p => {
+                        const hold = p.hold_minutes == null ? '-' : `${p.hold_minutes.toFixed(1)}m`;
+                        const pnlVal = Number(p.pnl_percent || 0);
+                        const pnl = `${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}`;
+                        const pnlClass = pnlVal >= 0 ? 'positive' : 'negative';
+                        const reason = exitReasonMap[p.exit_hint] || (p.exit_hint || '持仓中');
+                        html += `<div class="logic-item">方向: ${p.direction} | 持仓: ${hold} | PnL: <span class="${pnlClass}">${pnl}%</span></div>`;
+                        html += `<div class="logic-item">SL: ${Number(p.stop_loss || 0).toFixed(2)} | TP: ${Number(p.take_profit || 0).toFixed(2)} | 提示: ${reason}</div>`;
+                        if (p.opportunity) {
+                            const gap = Number(p.opportunity.gap || 0);
+                            const gapText = `${gap >= 0 ? '+' : ''}${gap.toFixed(1)}`;
+                            html += `<div class="logic-item">机会切换条件: ${p.opportunity.label}分数 ${Number(p.opportunity.score || 0).toFixed(1)} / 需要 ${Number(p.opportunity.need || 0).toFixed(1)} | 差值 ${gapText}</div>`;
+                        }
+                        if (p.time_cost) {
+                            const holdMin = Number(p.time_cost.hold_minutes || 0);
+                            const maxHold = Number(p.time_cost.max_hold || 0);
+                            const currentProfit = Number(p.time_cost.current_profit || 0);
+                            const minProfit = Number(p.time_cost.min_profit || 0);
+                            const timeColor = holdMin >= maxHold && currentProfit < minProfit ? '#f0b90b' : '#848e9c';
+                            html += `<div class="logic-item" style="color: ${timeColor}">时间成本: 持仓 ${holdMin.toFixed(1)}分 / 超时 ${maxHold.toFixed(0)}分 | 盈利 ${currentProfit >= 0 ? '+' : ''}${currentProfit.toFixed(2)}% / 最低 ${minProfit.toFixed(2)}%</div>`;
+                        }
+                        if (p.exit_notes && p.exit_notes.length > 0) {
+                            html += `<div class="logic-item">提示依据: ${p.exit_notes.join(', ')}</div>`;
+                        }
+                    });
+                    html += '</div>';
+                }
+                
+                if (data.ai_logic.batch && data.ai_logic.batch.entry_batches) {
+                    const batches = data.ai_logic.batch.entry_batches;
+                    if (batches.length > 0) {
+                        html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
+                        html += '<div class="logic-title">分批计划：</div>';
+                        batches.forEach(b => {
+                            html += `<div class="logic-item">第${b.batch}批: ${Math.round(b.ratio * 100)}%</div>`;
+                        });
+                        html += '</div>';
+                    }
+                }
+                
+                // 策略参数（机会成本/时间成本阈值）
+                if (data.ai_logic.strategy_params) {
+                    const sp = data.ai_logic.strategy_params;
+                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
+                    html += '<div class="logic-title">风控策略参数：</div>';
+                    html += `<div class="logic-item">机会切换阈值: 反向分数需超过入场阈值 +${Number(sp.opportunity_delta || 0).toFixed(0)}</div>`;
+                    html += `<div class="logic-item">时间成本: 持仓超${Number(sp.max_hold_minutes || 0).toFixed(0)}分 且 盈利低于${Number(sp.min_profit_pct || 0).toFixed(2)}% 则退出</div>`;
+                    html += '</div>';
+                }
+                
+                if (data.learning) {
+                    html += '<div class="logic-section" style="margin-top: 10px; border-top: 1px solid #2b3139; padding-top: 8px;">';
+                    html += `<div class="logic-item">学习进度: ${data.learning.total_trades}/${data.learning.min_trades_needed} (${data.learning.progress_percent.toFixed(0)}%)</div>`;
+                    html += `<div class="logic-item">特征优化次数: ${data.learning.weight_adjustments} 次</div>`;
+                    html += '</div>';
+                }
+                
+                container.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Failed to update AI logic:', error);
+            }
+        }
+        
+        // 更新交易日志
+        async function updateLogs() {
+            try {
+                const response = await fetch('/api/agent/logs');
+                const data = await response.json();
+                
+                const container = document.getElementById('logs-container');
+                
+                if (!data.logs || data.logs.length === 0) {
+                    container.innerHTML = '<div class="no-data">暂无日志</div>';
+                    return;
+                }
+                
+                // 反转数组以显示最新的在上面
+                const logs = [...data.logs].reverse();
+                
+                container.innerHTML = logs.slice(0, 20).map(log => `
+                    <div class="log-item log-level-${log.level}">
+                        <span class="log-time">${log.time}</span>
+                        <span class="log-message">${log.message}</span>
+                    </div>
+                `).join('');
+                
+            } catch (error) {
+                console.error('Failed to update logs:', error);
+            }
+        }
+        
+        // 更新交易历史
+        async function updateTrades() {
+            try {
+                const response = await fetch('/api/agent/trades');
+                const data = await response.json();
+                
+                const container = document.getElementById('trades-container');
+                
+                if (!data.trades || data.trades.length === 0) {
+                    container.innerHTML = '<div class="no-data">暂无交易</div>';
+                    return;
+                }
+                
+                container.innerHTML = data.trades.slice(0, 10).map(trade => {
+                    const pnlClass = trade.pnl >= 0 ? 'positive' : 'negative';
+                    const isActive = trade.is_active ? '（持仓中）' : '';
+                    const pnlVal = Number(trade.pnl || 0);
+                    const pnlPctVal = Number(trade.pnl_percent || 0);
+                    
+                    return `
+                        <div class="trade-item">
+                            <div class="trade-header">
+                                <span class="trade-id">${trade.trade_id.substring(0, 8)}${isActive}</span>
+                                <span class="trade-direction-${trade.direction}">${trade.direction === 'LONG' ? '多' : '空'}</span>
+                            </div>
+                            <div class="trade-details">
+                                开仓: $${trade.entry_price.toFixed(2)} | ${trade.exit_price ? `平仓: $${trade.exit_price.toFixed(2)}` : '持仓中'}<br>
+                                数量: ${trade.quantity.toFixed(4)} BTC @ ${trade.leverage}x<br>
+                                <span class="trade-pnl ${pnlClass}">盈亏: $${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} (${pnlPctVal >= 0 ? '+' : ''}${pnlPctVal.toFixed(2)}%)</span>
+                                ${trade.exit_reason ? ` | 原因: ${trade.exit_reason}` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('Failed to update trades:', error);
+            }
+        }
+        
+        // 启动Agent
+        async function startAgent() {
+            try {
+                const response = await fetch('/api/agent/start', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateAgentStatus();
+                } else {
+                    alert('Failed to start: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        // 停止Agent
+        async function stopAgent() {
+            if (!confirm('Are you sure you want to stop the Agent?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/agent/stop', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateAgentStatus();
+                } else {
+                    alert('Failed to stop: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        // 更新Agent状态
+        async function updateAgentStatus() {
+            try {
+                const response = await fetch('/api/agent/status');
+                const data = await response.json();
+                
+                const statusEl = document.getElementById('agent-status');
+                const startBtn = document.getElementById('btn-start-agent');
+                const stopBtn = document.getElementById('btn-stop-agent');
+                
+                if (data.running) {
+                    statusEl.innerHTML = '<span class="status-indicator status-running"></span>Running';
+                    startBtn.style.display = 'none';
+                    stopBtn.style.display = 'block';
+                } else {
+                    statusEl.innerHTML = '<span class="status-indicator status-stopped"></span>Stopped';
+                    startBtn.style.display = 'block';
+                    stopBtn.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Failed to update agent status:', error);
+            }
+        }
+        
+        // 一键清仓
+        async function closeAllPositions() {
+            if (!confirm('Are you sure you want to close ALL positions?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/close_all', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`Closed ${data.closed} position(s)`);
+                    updatePositions();
+                } else {
+                    alert('Failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        // 平仓单个持仓
+        async function closePosition(tradeId, symbol, side, quantity, entryPrice, leverage) {
+            try {
+                const response = await fetch('/api/close', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tradeId,
+                        symbol,
+                        side,
+                        quantity,
+                        entryPrice,
+                        leverage
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    updatePositions();
+                    updateTrades();
+                } else {
+                    alert('Failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error: ' + error.message);
+            }
+        }
+        
+        // 更新当前时间（上海时间）
+        function updateCurrentTime() {
+            const now = new Date();
+            const timeStr = now.toLocaleString('zh-CN', { 
+                timeZone: 'Asia/Shanghai',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            });
+            document.getElementById('current-time').textContent = `Shanghai Time: ${timeStr}`;
+        }
+        
+        // 检查API状态
+        async function checkAPIStatus() {
+            try {
+                const response = await fetch('/api/account');
+                const statusEl = document.getElementById('api-status');
+                
+                if (response.ok) {
+                    statusEl.innerHTML = '<span class="status-indicator status-running"></span>Connected';
+                } else {
+                    statusEl.innerHTML = '<span class="status-indicator status-stopped"></span>Disconnected';
+                }
+            } catch (error) {
+                const statusEl = document.getElementById('api-status');
+                statusEl.innerHTML = '<span class="status-indicator status-stopped"></span>Disconnected';
+            }
+        }
+        
+        // 主更新循环
+        function startUpdateLoop() {
+            // 初始加载
+            updateCurrentTime();
+            updateAgentStatus();
+            updateKlines();
+            updateSupportResistance();
+            updateTradeMarkers();
+            updatePositions();
+            updateAILogic();
+            updateLogs();
+            updateTrades();
+            checkAPIStatus();
+            
+            // 每秒更新时钟
+            setInterval(updateCurrentTime, 1000);
+            
+            // 1秒刷新K线和持仓，K线更新后立即刷新标记（因为setData会清除markers）
+            setInterval(async () => {
+                await updateKlines();
+                await updateTradeMarkers();
+                updatePositions();
+            }, 1000);
+            
+            // 2秒刷新支撑阻力
+            setInterval(updateSupportResistance, 2000);
+            
+            // 1秒刷新AI逻辑和日志
+            setInterval(() => {
+                updateAILogic();
+                updateLogs();
+            }, 1000);
+            
+            // 3秒刷新交易历史
+            setInterval(updateTrades, 3000);
+            
+            // 5秒检查API状态
+            setInterval(checkAPIStatus, 5000);
+            
+            // 2秒刷新Agent状态
+            setInterval(updateAgentStatus, 2000);
+        }
+        
+        // 页面加载完成后初始化
+        window.addEventListener('load', () => {
+            initCharts();
+            initWeightsCard();
+            startUpdateLoop();
+        });
+    </script>
+</body>
+</html>
+
