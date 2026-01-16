@@ -156,6 +156,18 @@ def run_agent_loop():
     agent = TradingAgent(client, data_dir=RL_DATA_DIR, leverage=leverage)
     agent_state["agent"] = agent
     add_log("Agent已启动", "SUCCESS")
+    
+    # Force sync positions on startup
+    try:
+        binance_positions = client.get_positions()
+        active = [p for p in binance_positions if abs(float(p["positionAmt"])) > 0]
+        exchange_total = sum(abs(float(p.get("positionAmt", 0))) for p in active)
+        agent_total = sum(float(p.get("quantity", 0)) for p in agent.positions)
+        if abs(exchange_total - agent_total) > 0.0005:
+            add_log(f"启动时检测到持仓不一致: 交易所={exchange_total:.4f}, AI={agent_total:.4f}, 开始同步...", "WARNING")
+            # Sync will happen automatically on next /api/positions call
+    except Exception as e:
+        add_log(f"启动时持仓检查失败: {str(e)}", "ERROR")
 
     while agent_state["running"]:
         try:
@@ -370,65 +382,160 @@ def positions():
                     agent_positions = file_data.get("positions", [])
 
         def _sync_external_positions(active_positions, agent_positions_list, agent_obj):
-            if not active_positions:
-                return agent_positions_list
+            """
+            Sync positions between exchange and AI records.
+            Handles two cases:
+            1. Exchange > AI: Create external entries
+            2. AI > Exchange: Remove excess AI entries (orphaned records)
+            """
             updated = False
-            for ex in active_positions:
-                amt = float(ex.get("positionAmt", 0))
-                if abs(amt) <= 0:
+            
+            # Calculate exchange totals by direction
+            exchange_long_qty = 0.0
+            exchange_short_qty = 0.0
+            exchange_long_entry = 0.0
+            exchange_short_entry = 0.0
+            exchange_leverage = 10
+            
+            if active_positions:
+                for ex in active_positions:
+                    amt = float(ex.get("positionAmt", 0))
+                    if abs(amt) <= 0:
+                        continue
+                    direction = "LONG" if amt > 0 else "SHORT"
+                    qty = abs(amt)
+                    entry = float(ex.get("entryPrice", 0))
+                    leverage = int(ex.get("leverage", 10))
+                    exchange_leverage = leverage
+                    if direction == "LONG":
+                        exchange_long_qty += qty
+                        if exchange_long_entry == 0:
+                            exchange_long_entry = entry
+                    else:
+                        exchange_short_qty += qty
+                        if exchange_short_entry == 0:
+                            exchange_short_entry = entry
+            
+            # Calculate AI totals by direction
+            agent_long_qty = sum(
+                float(p.get("quantity", 0))
+                for p in agent_positions_list
+                if p.get("direction") == "LONG"
+            )
+            agent_short_qty = sum(
+                float(p.get("quantity", 0))
+                for p in agent_positions_list
+                if p.get("direction") == "SHORT"
+            )
+            
+            # Case 1: Exchange > AI - Create external entries
+            for direction, exchange_qty, exchange_entry, agent_qty in [
+                ("LONG", exchange_long_qty, exchange_long_entry, agent_long_qty),
+                ("SHORT", exchange_short_qty, exchange_short_entry, agent_short_qty),
+            ]:
+                if exchange_qty <= 0:
                     continue
-                direction = "LONG" if amt > 0 else "SHORT"
-                exchange_qty = abs(amt)
-                exchange_entry = float(ex.get("entryPrice", 0))
-                exchange_leverage = int(ex.get("leverage", 10))
-                agent_qty = sum(
-                    float(p.get("quantity", 0))
-                    for p in agent_positions_list
-                    if p.get("direction") == direction
-                )
                 diff = exchange_qty - agent_qty
-                if diff <= 0.0005:
-                    continue
-                trade_id = f"EXTERNAL-{direction}-{exchange_entry:.2f}-{diff:.4f}"
-                if any(p.get("trade_id") == trade_id for p in agent_positions_list):
-                    continue
-                sl_pct = 0.003
-                tp_pct = 0.035
-                if direction == "LONG":
-                    stop_loss = exchange_entry * (1 - sl_pct)
-                    take_profit = exchange_entry * (1 + tp_pct)
-                else:
-                    stop_loss = exchange_entry * (1 + sl_pct)
-                    take_profit = exchange_entry * (1 - tp_pct)
-                external_pos = {
-                    "trade_id": trade_id,
-                    "direction": direction,
-                    "entry_price": exchange_entry,
-                    "quantity": diff,
-                    "stop_loss": stop_loss,
-                    "take_profit": take_profit,
-                    "leverage": exchange_leverage,
-                    "timestamp_open": datetime.now().isoformat(),
-                    "entry_reason": "external_sync",
-                    "external": True,
-                }
-                agent_positions_list.append(external_pos)
+                if diff > 0.0005:  # Exchange has more
+                    trade_id = f"EXTERNAL-{direction}-{exchange_entry:.2f}-{diff:.4f}"
+                    if any(p.get("trade_id") == trade_id for p in agent_positions_list):
+                        continue
+                    sl_pct = 0.003
+                    tp_pct = 0.035
+                    if direction == "LONG":
+                        stop_loss = exchange_entry * (1 - sl_pct)
+                        take_profit = exchange_entry * (1 + tp_pct)
+                    else:
+                        stop_loss = exchange_entry * (1 + sl_pct)
+                        take_profit = exchange_entry * (1 - tp_pct)
+                    external_pos = {
+                        "trade_id": trade_id,
+                        "direction": direction,
+                        "entry_price": exchange_entry,
+                        "quantity": diff,
+                        "stop_loss": stop_loss,
+                        "take_profit": take_profit,
+                        "leverage": exchange_leverage,
+                        "timestamp_open": datetime.now().isoformat(),
+                        "entry_reason": "external_sync",
+                        "external": True,
+                    }
+                    agent_positions_list.append(external_pos)
+                    if agent_obj and getattr(agent_obj, "positions", None) is not None:
+                        agent_obj.positions.append(external_pos)
+                    updated = True
+            
+            # Case 2: AI > Exchange - Remove orphaned AI entries
+            for direction, exchange_qty, agent_qty in [
+                ("LONG", exchange_long_qty, agent_long_qty),
+                ("SHORT", exchange_short_qty, agent_short_qty),
+            ]:
+                excess = agent_qty - exchange_qty
+                if excess > 0.0005:  # AI has more than exchange
+                    # Remove excess, prioritizing non-external entries first
+                    to_remove = excess
+                    removed = []
+                    
+                    # First, remove non-external entries
+                    for pos in list(agent_positions_list):
+                        if pos.get("direction") != direction:
+                            continue
+                        if pos.get("external"):
+                            continue
+                        if to_remove <= 0:
+                            break
+                        qty = float(pos.get("quantity", 0))
+                        if qty <= to_remove:
+                            agent_positions_list.remove(pos)
+                            removed.append(pos)
+                            to_remove -= qty
+                        else:
+                            # Partial removal
+                            pos["quantity"] = qty - to_remove
+                            to_remove = 0
+                    
+                    # Then, remove external entries if still needed
+                    for pos in list(agent_positions_list):
+                        if pos.get("direction") != direction:
+                            continue
+                        if not pos.get("external"):
+                            continue
+                        if to_remove <= 0:
+                            break
+                        qty = float(pos.get("quantity", 0))
+                        if qty <= to_remove:
+                            agent_positions_list.remove(pos)
+                            removed.append(pos)
+                            to_remove -= qty
+                        else:
+                            pos["quantity"] = qty - to_remove
+                            to_remove = 0
+                    
+                    if removed:
+                        updated = True
+                        add_log(
+                            f"同步清理: {direction}方向多余持仓 {excess:.4f} BTC (已删除{len(removed)}条记录)",
+                            "WARNING",
+                        )
+            
+            # Save if updated
+            if updated:
                 if agent_obj and getattr(agent_obj, "positions", None) is not None:
-                    agent_obj.positions.append(external_pos)
                     try:
                         agent_obj._save_positions()
                     except Exception:
                         pass
-                updated = True
-            if updated and not agent_obj:
-                try:
-                    pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
-                    with open(pos_file, "w", encoding="utf-8") as f:
-                        json.dump({"positions": agent_positions_list}, f, indent=2)
-                except Exception:
-                    pass
+                else:
+                    try:
+                        pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
+                        with open(pos_file, "w", encoding="utf-8") as f:
+                            json.dump({"positions": agent_positions_list}, f, indent=2)
+                    except Exception:
+                        pass
+            
             return agent_positions_list
 
+        # Force sync positions (handles both exchange > AI and AI > exchange cases)
         agent_positions = _sync_external_positions(active, agent_positions, agent)
 
         result = []
@@ -824,40 +931,275 @@ def close_all_positions():
     try:
         positions = client.get_positions()
         active = [p for p in positions if abs(float(p["positionAmt"])) > 0]
-        if not active:
-            return jsonify({"success": True, "closed": 0})
         closed = 0
-        for p in active:
-            amt = float(p["positionAmt"])
-            side = "SELL" if amt > 0 else "BUY"
-            client.place_order(
-                symbol=p["symbol"],
-                side=side,
-                order_type="MARKET",
-                quantity=abs(amt),
-                reduce_only=True,
-            )
-            closed += 1
-        # 清理AI持仓并记录
-        agent = agent_state.get("agent")
-        if agent and agent.positions:
-            price = None
-            try:
-                price = float(client.get_ticker_price("BTCUSDT").get("price", 0))
-            except Exception:
-                price = None
-            for pos in list(agent.positions):
-                exit_price = price or pos.get("entry_price", 0)
-                trade = agent.execute_exit_position(
-                    pos, exit_price, "MANUAL_CLOSE_ALL", ["manual_close_all"], skip_api=True
-                )
-                if trade:
-                    add_log(
-                        f"一键清仓 {trade['trade_id'][:8]} PnL={trade['pnl']:.2f} ({trade['pnl_percent']:.2f}%)",
-                        "INFO",
+        
+        # Close exchange positions
+        if active:
+            for p in active:
+                amt = float(p["positionAmt"])
+                side = "SELL" if amt > 0 else "BUY"
+                try:
+                    client.place_order(
+                        symbol=p["symbol"],
+                        side=side,
+                        order_type="MARKET",
+                        quantity=abs(amt),
+                        reduce_only=True,
                     )
-        return jsonify({"success": True, "closed": closed})
+                    closed += 1
+                except Exception as e:
+                    add_log(f"平仓失败: {str(e)}", "ERROR")
+        
+        # Get current price for logging
+        price = None
+        try:
+            price = float(client.get_ticker_price("BTCUSDT").get("price", 0))
+        except Exception:
+            pass
+        
+        # Clear ALL AI positions and log them
+        agent = agent_state.get("agent")
+        logged_count = 0
+        
+        # Get positions from agent or file
+        agent_positions = []
+        if agent and agent.positions:
+            agent_positions = list(agent.positions)
+        else:
+            pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
+            if os.path.exists(pos_file):
+                try:
+                    with open(pos_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        agent_positions = data.get("positions", [])
+                except Exception:
+                    agent_positions = []
+        
+        # Log and clear all AI positions
+        for pos in agent_positions:
+            exit_price = price or pos.get("entry_price", 0)
+            if agent:
+                try:
+                    trade = agent.execute_exit_position(
+                        pos, exit_price, "MANUAL_CLOSE_ALL", ["manual_close_all"], skip_order=True
+                    )
+                    if trade:
+                        logged_count += 1
+                        add_log(
+                            f"一键清仓记录 {trade['trade_id'][:8]} PnL={trade['pnl']:.2f} ({trade['pnl_percent']:.2f}%)",
+                            "INFO",
+                        )
+                except Exception as e:
+                    add_log(f"记录清仓失败 {pos.get('trade_id', 'unknown')}: {str(e)}", "ERROR")
+        
+        # Force clear all positions from memory and file
+        if agent and hasattr(agent, "positions"):
+            agent.positions = []
+            try:
+                agent._save_positions()
+            except Exception:
+                pass
+        
+        # Clear file
+        pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
+        try:
+            with open(pos_file, "w", encoding="utf-8") as f:
+                json.dump({"positions": []}, f, indent=2)
+        except Exception:
+            pass
+        
+        add_log(f"一键清仓完成: 交易所平仓{closed}笔, AI记录清理{logged_count}笔", "INFO")
+        
+        return jsonify({
+            "success": True,
+            "closed": closed,
+            "logged": logged_count,
+            "message": f"已平仓{closed}笔, 已清理{logged_count}条AI记录"
+        })
     except Exception as exc:
+        add_log(f"一键清仓错误: {str(exc)}", "ERROR")
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.route("/api/sync_positions", methods=["POST"])
+def sync_positions():
+    """
+    Force sync positions between exchange and AI records.
+    This will:
+    1. Remove orphaned AI entries (AI > Exchange)
+    2. Create external entries (Exchange > AI)
+    """
+    client = get_client()
+    if not client:
+        return jsonify({"error": "API keys not configured"}), 400
+    
+    try:
+        # Get exchange positions
+        binance_positions = client.get_positions()
+        active = [p for p in binance_positions if abs(float(p["positionAmt"])) > 0]
+        
+        # Get AI positions
+        agent = agent_state.get("agent")
+        agent_positions = []
+        if agent and agent.positions:
+            agent_positions = list(agent.positions)
+        else:
+            pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
+            if os.path.exists(pos_file):
+                try:
+                    with open(pos_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        agent_positions = data.get("positions", [])
+                except Exception:
+                    agent_positions = []
+        
+        # Calculate before sync
+        exchange_long = sum(abs(float(p.get("positionAmt", 0))) for p in active if float(p.get("positionAmt", 0)) > 0)
+        exchange_short = sum(abs(float(p.get("positionAmt", 0))) for p in active if float(p.get("positionAmt", 0)) < 0)
+        exchange_total = exchange_long + exchange_short
+        
+        agent_long = sum(float(p.get("quantity", 0)) for p in agent_positions if p.get("direction") == "LONG")
+        agent_short = sum(float(p.get("quantity", 0)) for p in agent_positions if p.get("direction") == "SHORT")
+        agent_total = agent_long + agent_short
+        
+        before_diff = exchange_total - agent_total
+        
+        # Sync
+        def _sync_external_positions(active_positions, agent_positions_list, agent_obj):
+            """Same sync function as in /api/positions"""
+            updated = False
+            exchange_long_qty = 0.0
+            exchange_short_qty = 0.0
+            exchange_long_entry = 0.0
+            exchange_short_entry = 0.0
+            exchange_leverage = 10
+            
+            if active_positions:
+                for ex in active_positions:
+                    amt = float(ex.get("positionAmt", 0))
+                    if abs(amt) <= 0:
+                        continue
+                    direction = "LONG" if amt > 0 else "SHORT"
+                    qty = abs(amt)
+                    entry = float(ex.get("entryPrice", 0))
+                    leverage = int(ex.get("leverage", 10))
+                    exchange_leverage = leverage
+                    if direction == "LONG":
+                        exchange_long_qty += qty
+                        if exchange_long_entry == 0:
+                            exchange_long_entry = entry
+                    else:
+                        exchange_short_qty += qty
+                        if exchange_short_entry == 0:
+                            exchange_short_entry = entry
+            
+            agent_long_qty = sum(float(p.get("quantity", 0)) for p in agent_positions_list if p.get("direction") == "LONG")
+            agent_short_qty = sum(float(p.get("quantity", 0)) for p in agent_positions_list if p.get("direction") == "SHORT")
+            
+            # Add external entries
+            for direction, exchange_qty, exchange_entry, agent_qty in [
+                ("LONG", exchange_long_qty, exchange_long_entry, agent_long_qty),
+                ("SHORT", exchange_short_qty, exchange_short_entry, agent_short_qty),
+            ]:
+                if exchange_qty <= 0:
+                    continue
+                diff = exchange_qty - agent_qty
+                if diff > 0.0005:
+                    trade_id = f"EXTERNAL-{direction}-{exchange_entry:.2f}-{diff:.4f}"
+                    if any(p.get("trade_id") == trade_id for p in agent_positions_list):
+                        continue
+                    sl_pct = 0.003
+                    tp_pct = 0.035
+                    if direction == "LONG":
+                        stop_loss = exchange_entry * (1 - sl_pct)
+                        take_profit = exchange_entry * (1 + tp_pct)
+                    else:
+                        stop_loss = exchange_entry * (1 + sl_pct)
+                        take_profit = exchange_entry * (1 - tp_pct)
+                    external_pos = {
+                        "trade_id": trade_id,
+                        "direction": direction,
+                        "entry_price": exchange_entry,
+                        "quantity": diff,
+                        "stop_loss": stop_loss,
+                        "take_profit": take_profit,
+                        "leverage": exchange_leverage,
+                        "timestamp_open": datetime.now().isoformat(),
+                        "entry_reason": "external_sync",
+                        "external": True,
+                    }
+                    agent_positions_list.append(external_pos)
+                    if agent_obj and getattr(agent_obj, "positions", None) is not None:
+                        agent_obj.positions.append(external_pos)
+                    updated = True
+            
+            # Remove orphaned entries
+            removed_count = 0
+            for direction, exchange_qty, agent_qty in [
+                ("LONG", exchange_long_qty, agent_long_qty),
+                ("SHORT", exchange_short_qty, agent_short_qty),
+            ]:
+                excess = agent_qty - exchange_qty
+                if excess > 0.0005:
+                    to_remove = excess
+                    for pos in list(agent_positions_list):
+                        if pos.get("direction") != direction:
+                            continue
+                        if to_remove <= 0:
+                            break
+                        qty = float(pos.get("quantity", 0))
+                        if qty <= to_remove:
+                            agent_positions_list.remove(pos)
+                            removed_count += 1
+                            to_remove -= qty
+                        else:
+                            pos["quantity"] = qty - to_remove
+                            to_remove = 0
+                    if removed_count > 0:
+                        updated = True
+            
+            if updated:
+                if agent_obj and getattr(agent_obj, "positions", None) is not None:
+                    try:
+                        agent_obj._save_positions()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
+                        with open(pos_file, "w", encoding="utf-8") as f:
+                            json.dump({"positions": agent_positions_list}, f, indent=2)
+                    except Exception:
+                        pass
+            
+            return agent_positions_list, removed_count
+        
+        synced_positions, removed = _sync_external_positions(active, agent_positions, agent)
+        
+        # Calculate after sync
+        agent_long_after = sum(float(p.get("quantity", 0)) for p in synced_positions if p.get("direction") == "LONG")
+        agent_short_after = sum(float(p.get("quantity", 0)) for p in synced_positions if p.get("direction") == "SHORT")
+        agent_total_after = agent_long_after + agent_short_after
+        after_diff = exchange_total - agent_total_after
+        
+        add_log(f"强制同步完成: 删除{removed}条多余记录, 差值从{before_diff:.4f}调整为{after_diff:.4f}", "INFO")
+        
+        return jsonify({
+            "success": True,
+            "removed": removed,
+            "before": {
+                "exchange": round(exchange_total, 4),
+                "agent": round(agent_total, 4),
+                "diff": round(before_diff, 4),
+            },
+            "after": {
+                "exchange": round(exchange_total, 4),
+                "agent": round(agent_total_after, 4),
+                "diff": round(after_diff, 4),
+            },
+        })
+    except Exception as exc:
+        add_log(f"同步失败: {str(exc)}", "ERROR")
         return jsonify({"error": str(exc)}), 400
 
 

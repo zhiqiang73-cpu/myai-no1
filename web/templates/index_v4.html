@@ -110,6 +110,8 @@
             display: flex;
             flex-direction: column;
             gap: 8px;
+            overflow: hidden;
+            min-height: 0;
         }
         
         .card {
@@ -119,6 +121,7 @@
             overflow: hidden;
             display: flex;
             flex-direction: column;
+            min-height: 0;
         }
         
         .card-header {
@@ -165,7 +168,15 @@
         .card-body {
             padding: 10px;
             overflow-y: auto;
+            overflow-x: hidden;
             flex: 1;
+            min-height: 0;
+        }
+        
+        /* AI决策逻辑卡片特殊样式 */
+        #ai-logic {
+            max-height: none;
+            min-height: 200px;
         }
         
         /* 持仓信息 */
@@ -221,6 +232,8 @@
             margin-bottom: 2px;
             font-size: 10px;
             line-height: 1.4;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
         
         .logic-conclusion {
@@ -228,6 +241,24 @@
             font-weight: 600;
             margin-top: 6px;
             font-size: 10px;
+        }
+        
+        /* 确保AI决策逻辑卡片滚动条可见 */
+        #ai-logic::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        #ai-logic::-webkit-scrollbar-track {
+            background: #1a1d23;
+        }
+        
+        #ai-logic::-webkit-scrollbar-thumb {
+            background: #2b3139;
+            border-radius: 3px;
+        }
+        
+        #ai-logic::-webkit-scrollbar-thumb:hover {
+            background: #3a4149;
         }
         
         /* 底部区域 */
@@ -403,9 +434,9 @@
             </div>
             
             <!-- AI决策逻辑 -->
-            <div class="card" style="flex: 1;">
-                <div class="card-header">AI 决策逻辑</div>
-                <div class="card-body" id="ai-logic">
+            <div class="card" style="flex: 1; min-height: 300px; max-height: 500px;">
+                <div class="card-header" style="position: sticky; top: 0; z-index: 10; background: #1e2329;">AI 决策逻辑</div>
+                <div class="card-body" id="ai-logic" style="overflow-y: auto; overflow-x: hidden;">
                     <div class="no-data">等待分析...</div>
                 </div>
             </div>
