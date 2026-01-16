@@ -1243,6 +1243,54 @@
                     const pnlVal = Number(trade.pnl || 0);
                     const pnlPctVal = Number(trade.pnl_percent || 0);
                     
+                    // 格式化时间显示 (年月日 时:分)
+                    let entryTimeStr = '';
+                    let exitTimeStr = '';
+                    
+                    if (trade.entry_time) {
+                        try {
+                            // ISO格式: 2024-01-15T14:30:00 或 2024-01-15T14:30:00.000000
+                            const entryDate = new Date(trade.entry_time);
+                            if (!isNaN(entryDate.getTime())) {
+                                // 转换为上海时间 (UTC+8)
+                                const shanghaiOffset = 8 * 60 * 60 * 1000;
+                                const shanghaiTime = new Date(entryDate.getTime() + shanghaiOffset);
+                                const year = shanghaiTime.getUTCFullYear();
+                                const month = String(shanghaiTime.getUTCMonth() + 1).padStart(2, '0');
+                                const day = String(shanghaiTime.getUTCDate()).padStart(2, '0');
+                                const hour = String(shanghaiTime.getUTCHours()).padStart(2, '0');
+                                const minute = String(shanghaiTime.getUTCMinutes()).padStart(2, '0');
+                                entryTimeStr = `${year}-${month}-${day} ${hour}:${minute}`;
+                            } else {
+                                // 如果Date解析失败，尝试直接格式化字符串
+                                entryTimeStr = trade.entry_time.substring(0, 16).replace('T', ' ');
+                            }
+                        } catch (e) {
+                            // 备用方案：直接截取并格式化
+                            entryTimeStr = trade.entry_time.substring(0, 16).replace('T', ' ');
+                        }
+                    }
+                    
+                    if (trade.exit_time) {
+                        try {
+                            const exitDate = new Date(trade.exit_time);
+                            if (!isNaN(exitDate.getTime())) {
+                                const shanghaiOffset = 8 * 60 * 60 * 1000;
+                                const shanghaiTime = new Date(exitDate.getTime() + shanghaiOffset);
+                                const year = shanghaiTime.getUTCFullYear();
+                                const month = String(shanghaiTime.getUTCMonth() + 1).padStart(2, '0');
+                                const day = String(shanghaiTime.getUTCDate()).padStart(2, '0');
+                                const hour = String(shanghaiTime.getUTCHours()).padStart(2, '0');
+                                const minute = String(shanghaiTime.getUTCMinutes()).padStart(2, '0');
+                                exitTimeStr = `${year}-${month}-${day} ${hour}:${minute}`;
+                            } else {
+                                exitTimeStr = trade.exit_time.substring(0, 16).replace('T', ' ');
+                            }
+                        } catch (e) {
+                            exitTimeStr = trade.exit_time.substring(0, 16).replace('T', ' ');
+                        }
+                    }
+                    
                     return `
                         <div class="trade-item">
                             <div class="trade-header">
@@ -1250,7 +1298,9 @@
                                 <span class="trade-direction-${trade.direction}">${trade.direction === 'LONG' ? '多' : '空'}</span>
                             </div>
                             <div class="trade-details">
+                                ${entryTimeStr ? `<span style="color: #848e9c;">开仓时间: ${entryTimeStr}</span><br>` : ''}
                                 开仓: $${trade.entry_price.toFixed(2)} | ${trade.exit_price ? `平仓: $${trade.exit_price.toFixed(2)}` : '持仓中'}<br>
+                                ${exitTimeStr ? `<span style="color: #848e9c;">平仓时间: ${exitTimeStr}</span><br>` : ''}
                                 数量: ${trade.quantity.toFixed(4)} BTC @ ${trade.leverage}x<br>
                                 <span class="trade-pnl ${pnlClass}">盈亏: $${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} (${pnlPctVal >= 0 ? '+' : ''}${pnlPctVal.toFixed(2)}%)</span>
                                 ${trade.exit_reason ? ` | 原因: ${trade.exit_reason}` : ''}
