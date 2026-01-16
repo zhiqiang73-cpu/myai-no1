@@ -762,6 +762,61 @@ class TradingAgent:
         )
 
         exit_time = datetime.now()
+        
+        # Calculate hold time
+        hold_minutes = 0.0
+        try:
+            entry_dt = datetime.fromisoformat(position["timestamp_open"])
+            hold_minutes = (exit_time - entry_dt).total_seconds() / 60.0
+        except Exception:
+            pass
+        
+        # Analyze exit timing quality using exit_learner
+        exit_timing_quality = 0.0
+        klines_before = []
+        klines_after = []
+        market = self.last_market or {}
+        klines_1m = market.get("klines_1m", [])
+        
+        if klines_1m and len(klines_1m) >= 10:
+            try:
+                exit_ts = int(exit_time.timestamp())
+                exit_idx = self._find_kline_index(klines_1m, exit_ts)
+                if exit_idx is not None:
+                    # Get 5 candles before and after
+                    klines_before = klines_1m[max(0, exit_idx - 5):exit_idx]
+                    klines_after = klines_1m[exit_idx + 1:min(len(klines_1m), exit_idx + 6)]
+                    
+                    timing_analysis = self.exit_learner.analyze_exit_quality(
+                        current_price,
+                        position["direction"],
+                        klines_before,
+                        klines_after,
+                    )
+                    exit_timing_quality = float(timing_analysis.get("quality", 0.0))
+            except Exception:
+                pass
+        
+        # Update exit learner
+        try:
+            exit_learner_result = self.exit_learner.update(
+                pnl_percent,
+                exit_timing_quality,
+                hold_minutes,
+                reason,
+            )
+            # Update exit_manager with learned parameters from exit_learner
+            exit_params = self.exit_learner.get_exit_params()
+            if self.exit_manager:
+                # Sync learned parameters to exit_manager
+                update_dict = {
+                    "max_hold_minutes": exit_params.get("max_hold_minutes", 45),
+                    "min_profit_pct": exit_params.get("min_profit_after_time", 0.2),
+                }
+                self.exit_manager.update_params(update_dict)
+        except Exception as e:
+            exit_learner_result = None
+        
         trade = {
             "trade_id": position["trade_id"],
             "direction": position["direction"],
@@ -785,7 +840,9 @@ class TradingAgent:
             pnl_reward = max(-1.0, min(1.0, pnl_percent / 2.0))
             timing_feedback = self._timing_feedback(position, current_price, exit_time)
             timing_reward = float(timing_feedback.get("timing_reward", 0.0)) if timing_feedback else 0.0
-            reward = max(-1.0, min(1.0, pnl_reward * 0.7 + timing_reward * 0.3))
+            # Combine exit_learner timing quality with existing timing feedback
+            combined_timing = (exit_timing_quality * 0.6 + timing_reward * 0.4)
+            reward = max(-1.0, min(1.0, pnl_reward * 0.7 + combined_timing * 0.3))
             trade["reward"] = reward
             trade["decision_feedback"] = {
                 "entry_score": position.get("entry_score"),
@@ -793,11 +850,14 @@ class TradingAgent:
                 "tf_weights": (self.last_market or {}).get("tf_weights"),
                 "pnl_reward": round(pnl_reward, 4),
                 "timing": timing_feedback,
+                "exit_timing_quality": round(exit_timing_quality, 3),
             }
             learned = self.strategy.update(reward, timing_feedback)
             self.exit_manager.update_params(self.strategy.get_exit_params())
             self.sl_tp.update_params(self.strategy.get_sl_tp_params())
             trade["strategy_params"] = learned
+            if exit_learner_result:
+                trade["exit_learner"] = exit_learner_result
             update = self.level_finder.update_weights(features, reward)
             if update:
                 trade["weight_update"] = update

@@ -166,9 +166,9 @@ class BestLevelFinder:
         return {
             "total_trades": total,
             "effective_trades": effective,
-            "min_trades_needed": 30,
-            "progress_percent": min(100, total / 30 * 100) if total < 30 else 100,
-            "can_adjust": total >= 30,
+            "min_trades_needed": 20,
+            "progress_percent": min(100, total / 20 * 100) if total < 20 else 100,
+            "can_adjust": total >= 20,
             "effectiveness_rate": (effective / total * 100) if total > 0 else 0,
             "weight_adjustments": len(self.stats.get("weight_history", [])),
             "current_weights": self.stats.get("weights", DEFAULT_WEIGHTS),
@@ -180,15 +180,25 @@ class BestLevelFinder:
             self.stats["effective_trades"] = self.stats.get("effective_trades", 0) + 1
         self._save()
 
-    def update_weights(self, features: Dict, reward: float, min_trades: int = 30) -> None:
+    def update_weights(self, features: Dict, reward: float, min_trades: int = 20) -> None:
         total = self.stats.get("total_trades", 0)
         if total < min_trades:
             return
 
         before = self.stats.get("weights", DEFAULT_WEIGHTS).copy()
         weights = before.copy()
-        # Increased learning rate for faster adaptation
-        lr = self.stats.get("learning_rate", 0.12)
+        
+        # Adaptive learning rate: higher for early trades (20-50), then stabilize
+        base_lr = self.stats.get("learning_rate", 0.12)
+        if total <= 50:
+            # Early phase: boost learning rate (2x for first 20, then 1.5x for 21-50)
+            lr_multiplier = 2.0 if total <= 20 else 1.5
+        else:
+            # Stable phase: normal learning rate
+            lr_multiplier = 1.0
+        
+        lr = base_lr * lr_multiplier
+        
         for k in weights:
             delta = lr * reward * (features.get(k, 0) - 0.5)
             weights[k] = max(0.01, weights[k] + delta)
