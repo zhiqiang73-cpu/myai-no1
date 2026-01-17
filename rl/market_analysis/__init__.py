@@ -6,6 +6,7 @@ from .indicators import TechnicalAnalyzer
 from .level_finder import BestLevelFinder
 from .levels import LevelDiscovery, LevelScoring
 from .regime import MarketRegimeDetector, BreakoutDetector
+from .pattern_detector import PatternDetector
 
 __all__ = [
     'TechnicalAnalyzer',
@@ -14,6 +15,7 @@ __all__ = [
     'LevelScoring',
     'MarketRegimeDetector',
     'BreakoutDetector',
+    'PatternDetector',
 ]
 
 

@@ -460,6 +460,25 @@
                     <div class="no-data">暂无权重</div>
                 </div>
             </div>
+            
+            <!-- K线形态统计 -->
+            <div class="card collapsed" id="patterns-card" style="min-height: 180px;">
+                <div class="card-header clickable" onclick="togglePatternsCard()">
+                    K线形态统计
+                    <span class="collapse-indicator" id="patterns-toggle-text">点击展开</span>
+                </div>
+                <div class="card-body" id="patterns-container">
+                    <div class="no-data">暂无形态数据</div>
+                </div>
+            </div>
+            
+            <!-- AI学习曲线 -->
+            <div class="card" style="min-height: 250px;">
+                <div class="card-header">🧠 AI自我进化（6特征学习）</div>
+                <div class="card-body" id="learning-container">
+                    <div class="no-data">学习数据加载中...</div>
+                </div>
+            </div>
         </div>
         
         <!-- K线图 - 8h -->
@@ -720,6 +739,23 @@
                 card.classList.remove('collapsed');
                 text.textContent = '点击收起';
             }
+        }
+
+        // 形态卡片折叠控制
+        function togglePatternsCard() {
+            const card = document.getElementById('patterns-card');
+            const text = document.getElementById('patterns-toggle-text');
+            if (!card || !text) return;
+            const collapsed = card.classList.toggle('collapsed');
+            text.textContent = collapsed ? '点击展开' : '点击收起';
+        }
+
+        function initPatternsCard() {
+            const card = document.getElementById('patterns-card');
+            const text = document.getElementById('patterns-toggle-text');
+            if (!card || !text) return;
+            card.classList.add('collapsed');
+            text.textContent = '点击展开';
         }
 
         // 渲染特征权重
@@ -1105,7 +1141,18 @@
                 const bestScore = Math.max(longScore, shortScore);
                 const marketQuality = bestScore >= thresholdScore ? '市场信号偏强' : '市场信号偏弱';
                 const thresholdHint = thresholdScore >= 50 ? '门槛偏高' : '门槛偏低';
-                const entryLine = `入场分数: 多${longScore.toFixed(0)} 空${shortScore.toFixed(0)} 阈值${thresholdScore.toFixed(0)} | ${marketQuality} | ${thresholdHint}`;
+                
+                // 显示形态加分（如果有）
+                let patternHint = '';
+                if (entry.pattern_boost) {
+                    const longBoost = Number(entry.pattern_boost.long || 0);
+                    const shortBoost = Number(entry.pattern_boost.short || 0);
+                    if (longBoost > 0 || shortBoost > 0) {
+                        patternHint = ` | K线形态: 多+${longBoost} 空+${shortBoost}`;
+                    }
+                }
+                
+                const entryLine = `入场分数: 多${longScore.toFixed(0)} 空${shortScore.toFixed(0)} 阈值${thresholdScore.toFixed(0)}${patternHint} | ${marketQuality}`;
                 let lastEntryLine = '';
                 if (entry.last_entry) {
                     const reason = entry.last_entry.reason || '-';
@@ -1284,6 +1331,13 @@
                         }
                     }
                     
+                    // 生成形态标签
+                    let patternTags = '';
+                    if (trade.patterns && Array.isArray(trade.patterns) && trade.patterns.length > 0) {
+                        const patternNames = trade.patterns.map(p => p.name_cn || p.name).join(', ');
+                        patternTags = `<br><span style="color: #f0b90b;">形态: ${patternNames}</span>`;
+                    }
+                    
                     return `
                         <div class="trade-item">
                             <div class="trade-header">
@@ -1297,6 +1351,7 @@
                                 数量: ${trade.quantity.toFixed(4)} BTC @ ${trade.leverage}x<br>
                                 <span class="trade-pnl ${pnlClass}">盈亏: $${pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} (${pnlPctVal >= 0 ? '+' : ''}${pnlPctVal.toFixed(2)}%)</span>
                                 ${trade.exit_reason ? ` | 原因: ${trade.exit_reason}` : ''}
+                                ${patternTags}
                             </div>
                         </div>
                     `;
@@ -1450,6 +1505,123 @@
             }
         }
         
+        // 更新K线形态统计
+        async function updatePatterns() {
+            try {
+                const response = await fetch('/api/agent/patterns');
+                const data = await response.json();
+                const container = document.getElementById('patterns-container');
+                if (!container) return;
+                
+                const totalCount = data.total?.count || 0;
+                if (totalCount === 0) {
+                    container.innerHTML = '<div class="no-data">暂无形态触发</div>';
+                    return;
+                }
+                
+                let html = `<div style="margin-bottom: 8px; color: #848e9c;">总触发: ${totalCount}次 | 总盈亏: $${(data.total?.pnl || 0).toFixed(2)}</div>`;
+                
+                const renderPatternList = (title, patterns) => {
+                    if (!patterns || patterns.length === 0) return '';
+                    let block = `<div style="margin-top: 8px; border-top: 1px solid #2b3139; padding-top: 6px;"><div style="color:#848e9c; margin-bottom:4px;">${title}</div>`;
+                    patterns.forEach(p => {
+                        const pnlColor = p.pnl >= 0 ? '#02c076' : '#f6465d';
+                        block += `<div style="margin-bottom:3px; font-size:10px;">
+                            <span style="color:#eaecef;">${p.name_cn}</span>
+                            <span style="color:#848e9c;"> x${p.count}</span>
+                            <span style="color:${pnlColor};"> $${p.pnl.toFixed(2)}</span>
+                            <span style="color:#f0b90b;"> 胜率${p.win_rate.toFixed(0)}%</span>
+                        </div>`;
+                    });
+                    block += '</div>';
+                    return block;
+                };
+                
+                html += renderPatternList('做多形态', data.long);
+                html += renderPatternList('做空形态', data.short);
+                container.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Failed to update patterns:', error);
+            }
+        }
+        
+        // 更新AI学习曲线（核心进化展示）
+        async function updateLearning() {
+            try {
+                const response = await fetch('/api/agent/learning');
+                const data = await response.json();
+                const container = document.getElementById('learning-container');
+                if (!container) return;
+                
+                const weights = data.weights || {};
+                const weights_cn = data.weights_cn || {};
+                const history = data.history || [];
+                
+                if (Object.keys(weights).length === 0) {
+                    container.innerHTML = '<div class="no-data">学习系统初始化中...</div>';
+                    return;
+                }
+                
+                let html = '';
+                
+                // 特征权重排行（按绝对值排序）
+                const weightEntries = Object.entries(weights).map(([k, v]) => ({
+                    key: k,
+                    name: weights_cn[k] || k,
+                    value: Number(v),
+                    absValue: Math.abs(Number(v))
+                }));
+                weightEntries.sort((a, b) => b.absValue - a.absValue);
+                
+                html += '<div style="margin-bottom: 10px; border-bottom: 1px solid #2b3139; padding-bottom: 8px;">';
+                html += '<div style="color:#f0b90b; font-size:11px; margin-bottom:6px;">📊 特征重要性排行</div>';
+                weightEntries.forEach((item, idx) => {
+                    const pct = (item.value * 100).toFixed(1);
+                    const barWidth = item.absValue * 100;
+                    const color = item.value >= 0 ? '#02c076' : '#f6465d';
+                    html += `
+                        <div style="margin-bottom: 6px;">
+                            <div style="display:flex; justify-content:space-between; font-size:10px;">
+                                <span style="color:#eaecef;">${idx + 1}. ${item.name}</span>
+                                <span style="color:${color};">${pct >= 0 ? '+' : ''}${pct}%</span>
+                            </div>
+                            <div style="width:100%; height:4px; background:#2b3139; border-radius:2px; overflow:hidden;">
+                                <div style="width:${barWidth}%; height:100%; background:${color};"></div>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+                
+                // 学习历史（最近10笔）
+                if (history.length > 0) {
+                    html += '<div style="margin-top: 8px;">';
+                    html += '<div style="color:#f0b90b; font-size:11px; margin-bottom:6px;">📈 学习记录（最近10笔）</div>';
+                    const recent = history.slice(-10).reverse();
+                    let winCount = 0;
+                    recent.forEach((h, idx) => {
+                        const pnl = Number(h.pnl_percent || 0);
+                        if (pnl > 0) winCount++;
+                        const pnlColor = pnl >= 0 ? '#02c076' : '#f6465d';
+                        const rewardColor = h.reward >= 0 ? '#02c076' : '#f6465d';
+                        html += `<div style="font-size:9px; color:#848e9c; margin-bottom:2px;">
+                            ${recent.length - idx}. PnL: <span style="color:${pnlColor};">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%</span> 
+                            | 奖励: <span style="color:${rewardColor};">${h.reward >= 0 ? '+' : ''}${h.reward.toFixed(3)}</span>
+                        </div>`;
+                    });
+                    const recentWinRate = (winCount / recent.length * 100).toFixed(0);
+                    html += `<div style="margin-top:6px; color:#f0b90b; font-size:10px;">近期胜率: ${recentWinRate}%</div>`;
+                    html += '</div>';
+                }
+                
+                container.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Failed to update learning:', error);
+            }
+        }
+        
         // 主更新循环
         function startUpdateLoop() {
             // 初始加载
@@ -1462,6 +1634,8 @@
             updateAILogic();
             updateLogs();
             updateTrades();
+            updatePatterns();
+            updateLearning();
             checkAPIStatus();
             
             // 每秒更新时钟
@@ -1483,8 +1657,12 @@
                 updateLogs();
             }, 1000);
             
-            // 3秒刷新交易历史
-            setInterval(updateTrades, 3000);
+            // 3秒刷新交易历史、形态统计和学习曲线
+            setInterval(() => {
+                updateTrades();
+                updatePatterns();
+                updateLearning();
+            }, 3000);
             
             // 5秒检查API状态
             setInterval(checkAPIStatus, 5000);
@@ -1497,6 +1675,7 @@
         window.addEventListener('load', () => {
             initCharts();
             initWeightsCard();
+            initPatternsCard();
             startUpdateLoop();
         });
     </script>

@@ -25,6 +25,15 @@ LOG_FILE = os.path.join(RL_DATA_DIR, "agent.log")
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
+
+def _safe_float(value, default=0.0):
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 agent_state = {
     "running": False,
     "thread": None,
@@ -124,22 +133,35 @@ def get_mainnet_order_book(symbol: str, limit: int = 100):
 
 
 def convert_klines(klines):
-    return [
-        {
-            "time": k[0] // 1000,
-            "open": float(k[1]),
-            "high": float(k[2]),
-            "low": float(k[3]),
-            "close": float(k[4]),
-            "volume": float(k[5]),
-        }
-        for k in klines
-    ]
+    if not isinstance(klines, list):
+        return []
+    candles = []
+    for k in klines:
+        if not isinstance(k, (list, tuple)) or len(k) < 6:
+            continue
+        time_val = k[0]
+        try:
+            time_val = int(time_val) // 1000
+        except (TypeError, ValueError):
+            continue
+        candles.append(
+            {
+                "time": time_val,
+                "open": _safe_float(k[1]),
+                "high": _safe_float(k[2]),
+                "low": _safe_float(k[3]),
+                "close": _safe_float(k[4]),
+                "volume": _safe_float(k[5]),
+            }
+        )
+    return candles
 
 
 def convert_order_book(depth):
-    bids = [(float(p), float(q)) for p, q in depth.get("bids", [])]
-    asks = [(float(p), float(q)) for p, q in depth.get("asks", [])]
+    if not isinstance(depth, dict):
+        return {"bids": [], "asks": []}
+    bids = [(_safe_float(p), _safe_float(q)) for p, q in depth.get("bids", [])]
+    asks = [(_safe_float(p), _safe_float(q)) for p, q in depth.get("asks", [])]
     return {"bids": bids, "asks": asks}
 
 
@@ -160,9 +182,13 @@ def run_agent_loop():
     # Force sync positions on startup
     try:
         binance_positions = client.get_positions()
-        active = [p for p in binance_positions if abs(float(p["positionAmt"])) > 0]
-        exchange_total = sum(abs(float(p.get("positionAmt", 0))) for p in active)
-        agent_total = sum(float(p.get("quantity", 0)) for p in agent.positions)
+        active = [
+            p for p in binance_positions if abs(_safe_float(p.get("positionAmt"))) > 0
+        ]
+        exchange_total = sum(
+            abs(_safe_float(p.get("positionAmt"))) for p in active
+        )
+        agent_total = sum(_safe_float(p.get("quantity")) for p in agent.positions)
         if abs(exchange_total - agent_total) > 0.0005:
             add_log(f"启动时检测到持仓不一致: 交易所={exchange_total:.4f}, AI={agent_total:.4f}, 开始同步...", "WARNING")
             # Sync will happen automatically on next /api/positions call
@@ -196,19 +222,25 @@ def run_agent_loop():
                 time.sleep(5)
                 continue
 
-            price = market["current_price"]
+            price = market.get("current_price", 0)
             best_support = market.get("best_support")
             best_resistance = market.get("best_resistance")
             scores = agent.get_current_scores(market)
             tf_weights = market.get("tf_weights") or {}
 
-            if best_support:
+            if best_support and best_support.get("price") is not None:
                 add_log(
-                    f"支撑位 {best_support['price']:.0f} (评分 {best_support['score']:.0f})"
+                    "支撑位 {price:.0f} (评分 {score:.0f})".format(
+                        price=_safe_float(best_support.get("price")),
+                        score=_safe_float(best_support.get("score")),
+                    )
                 )
-            if best_resistance:
+            if best_resistance and best_resistance.get("price") is not None:
                 add_log(
-                    f"阻力位 {best_resistance['price']:.0f} (评分 {best_resistance['score']:.0f})"
+                    "阻力位 {price:.0f} (评分 {score:.0f})".format(
+                        price=_safe_float(best_resistance.get("price")),
+                        score=_safe_float(best_resistance.get("score")),
+                    )
                 )
             add_log(
                 "逻辑链: 趋势={macro}/{micro} 多={long:.0f} 空={short:.0f} 阈值={th:.0f} "
@@ -340,25 +372,27 @@ def account():
     try:
         account_info = client.get_account()
         balances = client.get_balance()
+        if not isinstance(balances, list):
+            balances = []
         result = []
         for b in balances:
-            if float(b.get("balance", 0)) > 0:
+            if _safe_float(b.get("balance")) > 0:
                 result.append(
                     {
                         "asset": b["asset"],
-                        "available": float(b.get("availableBalance", 0)),
-                        "total": float(b.get("balance", 0)),
+                        "available": _safe_float(b.get("availableBalance")),
+                        "total": _safe_float(b.get("balance")),
                     }
                 )
         margin = {}
         if isinstance(account_info, dict):
             margin = {
-                "walletBalance": float(account_info.get("totalWalletBalance", 0)),
-                "marginBalance": float(account_info.get("totalMarginBalance", 0)),
-                "availableBalance": float(account_info.get("totalAvailableBalance", 0)),
-                "initialMargin": float(account_info.get("totalInitialMargin", 0)),
-                "maintMargin": float(account_info.get("totalMaintMargin", 0)),
-                "unrealizedProfit": float(account_info.get("totalUnrealizedProfit", 0)),
+                "walletBalance": _safe_float(account_info.get("totalWalletBalance")),
+                "marginBalance": _safe_float(account_info.get("totalMarginBalance")),
+                "availableBalance": _safe_float(account_info.get("totalAvailableBalance")),
+                "initialMargin": _safe_float(account_info.get("totalInitialMargin")),
+                "maintMargin": _safe_float(account_info.get("totalMaintMargin")),
+                "unrealizedProfit": _safe_float(account_info.get("totalUnrealizedProfit")),
             }
         return jsonify({"balances": result, "margin": margin})
     except Exception as exc:
@@ -373,11 +407,15 @@ def positions():
 
     try:
         binance_positions = client.get_positions()
-        active = [p for p in binance_positions if abs(float(p["positionAmt"])) > 0]
+        if not isinstance(binance_positions, list):
+            return jsonify({"error": "Invalid positions response"}), 400
+        active = [
+            p for p in binance_positions if abs(_safe_float(p.get("positionAmt"))) > 0
+        ]
         ticker_price = None
         try:
             ticker = client.get_ticker_price("BTCUSDT")
-            ticker_price = float(ticker.get("price", 0)) if ticker else None
+            ticker_price = _safe_float(ticker.get("price")) if ticker else None
         except Exception:
             ticker_price = None
 
@@ -388,9 +426,12 @@ def positions():
         else:
             pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
             if os.path.exists(pos_file):
-                with open(pos_file, "r", encoding="utf-8") as f:
-                    file_data = json.load(f)
-                    agent_positions = file_data.get("positions", [])
+                try:
+                    with open(pos_file, "r", encoding="utf-8") as f:
+                        file_data = json.load(f)
+                        agent_positions = file_data.get("positions", [])
+                except Exception:
+                    agent_positions = []
 
         def _sync_external_positions(active_positions, agent_positions_list, agent_obj):
             """
@@ -430,12 +471,12 @@ def positions():
             
             if active_positions:
                 for ex in active_positions:
-                    amt = float(ex.get("positionAmt", 0))
+                    amt = _safe_float(ex.get("positionAmt"))
                     if abs(amt) <= 0:
                         continue
                     direction = "LONG" if amt > 0 else "SHORT"
                     qty = abs(amt)
-                    entry = float(ex.get("entryPrice", 0))
+                    entry = _safe_float(ex.get("entryPrice"))
                     leverage = int(ex.get("leverage", 10))
                     exchange_leverage = leverage
                     if direction == "LONG":
@@ -449,12 +490,12 @@ def positions():
             
             # Calculate AI totals by direction
             agent_long_qty = sum(
-                float(p.get("quantity", 0))
+                _safe_float(p.get("quantity"))
                 for p in agent_positions_list
                 if p.get("direction") == "LONG"
             )
             agent_short_qty = sum(
-                float(p.get("quantity", 0))
+                _safe_float(p.get("quantity"))
                 for p in agent_positions_list
                 if p.get("direction") == "SHORT"
             )
@@ -522,7 +563,7 @@ def positions():
                     scale_ratio = exchange_qty / agent_qty
                     direction_positions = [p for p in agent_positions_list if p.get("direction") == direction]
                     for pos in direction_positions:
-                        old_qty = float(pos.get("quantity", 0))
+                        old_qty = _safe_float(pos.get("quantity"))
                         new_qty = round(old_qty * scale_ratio, 4)
                         if new_qty < 0.001:
                             # 数量太小，移除这笔记录
@@ -557,14 +598,18 @@ def positions():
 
         result = []
         for p in active:
-            amt = float(p["positionAmt"])
+            amt = _safe_float(p.get("positionAmt"))
             direction = "LONG" if amt > 0 else "SHORT"
-            entry_price = float(p["entryPrice"])
-            mark_price = float(p.get("markPrice", entry_price))
-            pnl = float(p.get("unRealizedProfit", 0))
+            entry_price = _safe_float(p.get("entryPrice"))
+            mark_price = _safe_float(p.get("markPrice", entry_price))
+            pnl = _safe_float(p.get("unRealizedProfit"))
             notional = abs(amt) * mark_price
             leverage = int(p.get("leverage", 10))
-            margin_used = float(p.get("positionInitialMargin", 0) or p.get("isolatedMargin", 0) or 0)
+            margin_used = _safe_float(
+                p.get("positionInitialMargin")
+                or p.get("isolatedMargin")
+                or 0
+            )
             if margin_used <= 0 and leverage > 0:
                 margin_used = notional / leverage
             pnl_percent = (
@@ -580,7 +625,7 @@ def positions():
             for ap in agent_positions:
                 if ap.get("direction") != direction:
                     continue
-                diff = abs(ap.get("entry_price", 0) - entry_price)
+                diff = abs(_safe_float(ap.get("entry_price")) - entry_price)
                 if closest is None or diff < closest["diff"]:
                     closest = {"diff": diff, "pos": ap}
             if closest and closest["diff"] < 50:
@@ -614,14 +659,14 @@ def positions():
                     "marginUsed": round(margin_used, 4),
                     "stopLoss": stop_loss,
                     "takeProfit": take_profit,
-                    "liquidationPrice": float(p.get("liquidationPrice", 0) or 0),
+                "liquidationPrice": _safe_float(p.get("liquidationPrice")),
                     "timestampOpen": None,
                 }
             )
         agent_entries = []
         for ap in agent_positions:
-            entry_price = float(ap.get("entry_price", 0))
-            qty = float(ap.get("quantity", 0))
+            entry_price = _safe_float(ap.get("entry_price"))
+            qty = _safe_float(ap.get("quantity"))
             direction = ap.get("direction")
             mark_price = ticker_price or entry_price
             pnl = 0.0
@@ -635,15 +680,15 @@ def positions():
                     pnl_percent = (entry_price - mark_price) / entry_price * 100
             leverage = int(ap.get("leverage", 10))
             notional = abs(qty) * mark_price if mark_price else 0.0
-            margin_used = float(ap.get("margin_used", 0) or 0)
+            margin_used = _safe_float(ap.get("margin_used") or 0)
             if margin_used <= 0 and leverage > 0:
                 margin_used = notional / leverage
             closest_exchange = None
             for ex in active:
-                ex_direction = "LONG" if float(ex["positionAmt"]) > 0 else "SHORT"
+                ex_direction = "LONG" if _safe_float(ex.get("positionAmt")) > 0 else "SHORT"
                 if ex_direction != direction:
                     continue
-                diff = abs(float(ex.get("entryPrice", 0)) - entry_price)
+                diff = abs(_safe_float(ex.get("entryPrice")) - entry_price)
                 if closest_exchange is None or diff < closest_exchange["diff"]:
                     closest_exchange = {"diff": diff, "pos": ex}
             if closest_exchange and closest_exchange["diff"] < 50:
@@ -667,16 +712,16 @@ def positions():
                     "source": "external" if ap.get("external") else "agent",
                 }
             )
-        exchange_qty = sum(abs(float(p.get("positionAmt", 0))) for p in active)
-        agent_qty = sum(float(p.get("quantity", 0)) for p in agent_positions)
+        exchange_qty = sum(abs(_safe_float(p.get("positionAmt"))) for p in active)
+        agent_qty = sum(_safe_float(p.get("quantity")) for p in agent_positions)
         qty_diff = exchange_qty - agent_qty
         pct_diff = (qty_diff / exchange_qty * 100) if exchange_qty else 0.0
         has_mismatch = exchange_qty > 0 and abs(pct_diff) >= 1.0
         note = ""
         if has_mismatch:
             note = "持仓总量与AI开仓明细不一致，可能存在手动开仓或历史持仓未同步"
-        exchange_margin_used = sum(float(p.get("marginUsed", 0) or 0) for p in result)
-        agent_margin_used = sum(float(p.get("marginUsed", 0) or 0) for p in agent_entries)
+        exchange_margin_used = sum(_safe_float(p.get("marginUsed") or 0) for p in result)
+        agent_margin_used = sum(_safe_float(p.get("marginUsed") or 0) for p in agent_entries)
         summary = {
             "exchange_qty": round(exchange_qty, 6),
             "agent_qty": round(agent_qty, 6),
@@ -707,14 +752,22 @@ def klines_all(symbol):
             candles = []
             volumes = []
             for k in data:
-                ts = k[0] // 1000
-                o, h, l, c = float(k[1]), float(k[2]), float(k[3]), float(k[4])
-                vol = float(k[5])
+                if not isinstance(k, (list, tuple)) or len(k) < 6:
+                    continue
+                try:
+                    ts = int(k[0]) // 1000
+                except (TypeError, ValueError):
+                    continue
+                o, h, l, c = (
+                    _safe_float(k[1]),
+                    _safe_float(k[2]),
+                    _safe_float(k[3]),
+                    _safe_float(k[4]),
+                )
+                vol = _safe_float(k[5])
                 if o <= 0 or h <= 0 or l <= 0 or c <= 0:
                     continue
-                candles.append(
-                    {"time": ts, "open": o, "high": h, "low": l, "close": c}
-                )
+                candles.append({"time": ts, "open": o, "high": h, "low": l, "close": c})
                 volumes.append(
                     {
                         "time": ts,
@@ -812,6 +865,28 @@ def agent_levels():
     return jsonify({"best_support": None, "best_resistance": None})
 
 
+@app.route("/api/agent/patterns")
+def agent_patterns():
+    """K线形态统计API"""
+    agent = agent_state.get("agent")
+    if agent:
+        return jsonify(agent.pattern_detector.get_stats())
+    return jsonify({"long": [], "short": [], "total": {"count": 0, "pnl": 0.0}})
+
+
+@app.route("/api/agent/learning")
+def agent_learning():
+    """决策特征学习API"""
+    agent = agent_state.get("agent")
+    if agent:
+        return jsonify({
+            "weights": agent.decision_learner.get_weights(),
+            "weights_cn": agent.decision_learner.get_feature_names_cn(),
+            "history": agent.decision_learner.get_history(),
+        })
+    return jsonify({"weights": {}, "history": []})
+
+
 @app.route("/api/agent/trades")
 def agent_trades():
     agent = agent_state.get("agent")
@@ -832,28 +907,44 @@ def agent_trades():
     else:
         pos_file = os.path.join(RL_DATA_DIR, "active_positions.json")
         if os.path.exists(pos_file):
-            with open(pos_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                active_ids = {
-                    p.get("trade_id") for p in data.get("positions", []) if p.get("trade_id")
-                }
+            try:
+                with open(pos_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    active_ids = {
+                        p.get("trade_id")
+                        for p in data.get("positions", [])
+                        if p.get("trade_id")
+                    }
+            except Exception:
+                active_ids = set()
 
     formatted = []
     for t in trades:
+        # Parse patterns from JSON string if stored
+        patterns_data = t.get("patterns", [])
+        if isinstance(patterns_data, str):
+            try:
+                patterns_data = json.loads(patterns_data)
+            except:
+                patterns_data = []
+        
         formatted.append(
             {
                 "trade_id": t.get("trade_id"),
                 "direction": t.get("direction"),
-                "entry_price": float(t.get("entry_price", 0)),
-                "exit_price": float(t.get("exit_price", 0)) if t.get("exit_price") else None,
-                "quantity": float(t.get("quantity", 0)),
+                "entry_price": _safe_float(t.get("entry_price")),
+                "exit_price": _safe_float(t.get("exit_price")) if t.get("exit_price") is not None else None,
+                "quantity": _safe_float(t.get("quantity")),
                 "leverage": int(t.get("leverage", 10)),
-                "pnl": float(t.get("pnl", 0)),
-                "pnl_percent": float(t.get("pnl_percent", 0)),
+                "pnl": _safe_float(t.get("pnl")),
+                "pnl_percent": _safe_float(t.get("pnl_percent")),
+                "raw_pnl": _safe_float(t.get("raw_pnl")),
+                "commission": _safe_float(t.get("commission")),
                 "exit_reason": t.get("exit_reason", ""),
                 "entry_time": t.get("timestamp_open"),
                 "exit_time": t.get("timestamp_close"),
                 "is_active": t.get("trade_id") in active_ids,
+                "patterns": patterns_data,
             }
         )
     # Add active positions as trades (for markers)
@@ -877,7 +968,7 @@ def agent_trades():
         try:
             ticker = client.get_ticker_price("BTCUSDT") if client else None
             if ticker:
-                current_price = float(ticker.get("price", 0))
+                current_price = _safe_float(ticker.get("price"))
         except Exception:
             current_price = 0
 
@@ -886,15 +977,15 @@ def agent_trades():
         # Skip if already in formatted from trade_logger
         if pos.get("trade_id") in existing_trade_ids:
             continue
-        entry_price = float(pos.get("entry_price", 0))
+        entry_price = _safe_float(pos.get("entry_price"))
         pnl = 0.0
         pnl_percent = 0.0
         if current_price and entry_price:
             if pos.get("direction") == "LONG":
-                pnl = (current_price - entry_price) * float(pos.get("quantity", 0))
+                pnl = (current_price - entry_price) * _safe_float(pos.get("quantity"))
                 pnl_percent = (current_price - entry_price) / entry_price * 100
             else:
-                pnl = (entry_price - current_price) * float(pos.get("quantity", 0))
+                pnl = (entry_price - current_price) * _safe_float(pos.get("quantity"))
                 pnl_percent = (entry_price - current_price) / entry_price * 100
         formatted.append(
             {
@@ -902,7 +993,7 @@ def agent_trades():
                 "direction": pos.get("direction"),
                 "entry_price": entry_price,
                 "exit_price": None,
-                "quantity": float(pos.get("quantity", 0)),
+                "quantity": _safe_float(pos.get("quantity")),
                 "leverage": int(pos.get("leverage", 10)),
                 "pnl": pnl,
                 "pnl_percent": pnl_percent,
@@ -927,7 +1018,7 @@ def close_position():
             symbol=data.get("symbol", "BTCUSDT"),
             side=side,
             order_type="MARKET",
-            quantity=float(data.get("quantity", 0)),
+            quantity=_safe_float(data.get("quantity")),
             reduce_only=True,
         )
         # 同步AI持仓与交易记录
@@ -936,7 +1027,7 @@ def close_position():
         if agent and trade_id:
             price = None
             try:
-                price = float(client.get_ticker_price("BTCUSDT").get("price", 0))
+                price = _safe_float(client.get_ticker_price("BTCUSDT").get("price"))
             except Exception:
                 price = None
             for pos in list(agent.positions):
@@ -964,13 +1055,15 @@ def close_all_positions():
         return jsonify({"error": "API keys not configured"}), 400
     try:
         positions = client.get_positions()
-        active = [p for p in positions if abs(float(p["positionAmt"])) > 0]
+        if not isinstance(positions, list):
+            return jsonify({"error": "Invalid positions response"}), 400
+        active = [p for p in positions if abs(_safe_float(p.get("positionAmt"))) > 0]
         closed = 0
         
         # Close exchange positions
         if active:
             for p in active:
-                amt = float(p["positionAmt"])
+                amt = _safe_float(p.get("positionAmt"))
                 side = "SELL" if amt > 0 else "BUY"
                 try:
                     client.place_order(
@@ -987,7 +1080,7 @@ def close_all_positions():
         # Get current price for logging
         price = None
         try:
-            price = float(client.get_ticker_price("BTCUSDT").get("price", 0))
+            price = _safe_float(client.get_ticker_price("BTCUSDT").get("price"))
         except Exception:
             pass
         
@@ -1073,7 +1166,7 @@ def get_commission():
             income = []
         
         # Calculate totals
-        total_commission = sum(abs(float(t.get("commission", 0))) for t in trades)
+        total_commission = sum(abs(_safe_float(t.get("commission"))) for t in trades)
         commission_asset = trades[0].get("commissionAsset", "USDT") if trades else "USDT"
         
         # Format recent trades
@@ -1083,11 +1176,11 @@ def get_commission():
                 "time": t.get("time"),
                 "symbol": t.get("symbol"),
                 "side": t.get("side"),
-                "price": float(t.get("price", 0)),
-                "qty": float(t.get("qty", 0)),
-                "commission": float(t.get("commission", 0)),
+                "price": _safe_float(t.get("price")),
+                "qty": _safe_float(t.get("qty")),
+                "commission": _safe_float(t.get("commission")),
                 "commissionAsset": t.get("commissionAsset", "USDT"),
-                "realizedPnl": float(t.get("realizedPnl", 0)),
+                "realizedPnl": _safe_float(t.get("realizedPnl")),
             })
         
         return jsonify({
@@ -1115,7 +1208,11 @@ def sync_positions():
     try:
         # Get exchange positions
         binance_positions = client.get_positions()
-        active = [p for p in binance_positions if abs(float(p["positionAmt"])) > 0]
+        if not isinstance(binance_positions, list):
+            return jsonify({"error": "Invalid positions response"}), 400
+        active = [
+            p for p in binance_positions if abs(_safe_float(p.get("positionAmt"))) > 0
+        ]
         
         # Get AI positions
         agent = agent_state.get("agent")
@@ -1133,12 +1230,20 @@ def sync_positions():
                     agent_positions = []
         
         # Calculate before sync
-        exchange_long = sum(abs(float(p.get("positionAmt", 0))) for p in active if float(p.get("positionAmt", 0)) > 0)
-        exchange_short = sum(abs(float(p.get("positionAmt", 0))) for p in active if float(p.get("positionAmt", 0)) < 0)
+        exchange_long = sum(
+            abs(_safe_float(p.get("positionAmt")))
+            for p in active
+            if _safe_float(p.get("positionAmt")) > 0
+        )
+        exchange_short = sum(
+            abs(_safe_float(p.get("positionAmt")))
+            for p in active
+            if _safe_float(p.get("positionAmt")) < 0
+        )
         exchange_total = exchange_long + exchange_short
         
-        agent_long = sum(float(p.get("quantity", 0)) for p in agent_positions if p.get("direction") == "LONG")
-        agent_short = sum(float(p.get("quantity", 0)) for p in agent_positions if p.get("direction") == "SHORT")
+        agent_long = sum(_safe_float(p.get("quantity")) for p in agent_positions if p.get("direction") == "LONG")
+        agent_short = sum(_safe_float(p.get("quantity")) for p in agent_positions if p.get("direction") == "SHORT")
         agent_total = agent_long + agent_short
         
         before_diff = exchange_total - agent_total
@@ -1155,12 +1260,12 @@ def sync_positions():
             
             if active_positions:
                 for ex in active_positions:
-                    amt = float(ex.get("positionAmt", 0))
+                    amt = _safe_float(ex.get("positionAmt"))
                     if abs(amt) <= 0:
                         continue
                     direction = "LONG" if amt > 0 else "SHORT"
                     qty = abs(amt)
-                    entry = float(ex.get("entryPrice", 0))
+                    entry = _safe_float(ex.get("entryPrice"))
                     leverage = int(ex.get("leverage", 10))
                     exchange_leverage = leverage
                     if direction == "LONG":
@@ -1172,8 +1277,8 @@ def sync_positions():
                         if exchange_short_entry == 0:
                             exchange_short_entry = entry
             
-            agent_long_qty = sum(float(p.get("quantity", 0)) for p in agent_positions_list if p.get("direction") == "LONG")
-            agent_short_qty = sum(float(p.get("quantity", 0)) for p in agent_positions_list if p.get("direction") == "SHORT")
+            agent_long_qty = sum(_safe_float(p.get("quantity")) for p in agent_positions_list if p.get("direction") == "LONG")
+            agent_short_qty = sum(_safe_float(p.get("quantity")) for p in agent_positions_list if p.get("direction") == "SHORT")
             
             # Add external entries
             for direction, exchange_qty, exchange_entry, agent_qty in [
@@ -1238,7 +1343,7 @@ def sync_positions():
                     scale_ratio = exchange_qty / agent_qty
                     direction_positions = [p for p in agent_positions_list if p.get("direction") == direction]
                     for pos in direction_positions:
-                        old_qty = float(pos.get("quantity", 0))
+                        old_qty = _safe_float(pos.get("quantity"))
                         new_qty = round(old_qty * scale_ratio, 4)
                         if new_qty < 0.001:
                             agent_positions_list.remove(pos)
@@ -1266,8 +1371,16 @@ def sync_positions():
         synced_positions, removed = _sync_external_positions(active, agent_positions, agent)
         
         # Calculate after sync
-        agent_long_after = sum(float(p.get("quantity", 0)) for p in synced_positions if p.get("direction") == "LONG")
-        agent_short_after = sum(float(p.get("quantity", 0)) for p in synced_positions if p.get("direction") == "SHORT")
+        agent_long_after = sum(
+            _safe_float(p.get("quantity"))
+            for p in synced_positions
+            if p.get("direction") == "LONG"
+        )
+        agent_short_after = sum(
+            _safe_float(p.get("quantity"))
+            for p in synced_positions
+            if p.get("direction") == "SHORT"
+        )
         agent_total_after = agent_long_after + agent_short_after
         after_diff = exchange_total - agent_total_after
         

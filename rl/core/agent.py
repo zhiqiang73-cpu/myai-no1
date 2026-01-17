@@ -12,12 +12,14 @@ from ..learning.dynamic_threshold import DynamicThresholdOptimizer
 from ..learning.north_star import NorthStarOptimizer
 from ..learning.strategy_params import StrategyParamLearner
 from ..learning.exit_learner import ExitTimingLearner
+from ..learning.decision_learner import DecisionFeatureLearner
 from ..leverage_optimizer import LeverageOptimizer
 from ..market_analysis.indicators import TechnicalAnalyzer
 from ..market_analysis.level_finder import BestLevelFinder, FEATURE_NAMES_CN
 from ..market_analysis.levels import LevelDiscovery, LevelScoring
 from ..market_analysis.multi_timeframe_analyzer import MultiTimeframeAnalyzer
 from ..market_analysis.regime import MarketRegimeDetector, BreakoutDetector
+from ..market_analysis.pattern_detector import PatternDetector
 from ..position.batch_position_manager import BatchPositionManager
 from ..risk.risk_controller import RiskController
 from .knowledge import EvolutionManager, KnowledgeBase, TradeLogger
@@ -37,12 +39,12 @@ class ThoughtChain:
 class TradingAgent:
     MAX_POSITIONS = 3
 
-    def __init__(self, api_client, data_dir: str = "rl_data", leverage: int = 10):
+    def __init__(self, api_client, data_dir: str = "rl_data", leverage: int = 18):
         self.client = api_client
         self.data_dir = data_dir
         self.leverage = leverage
         self.base_leverage = leverage
-        self.base_margin_ratio = 0.08  # 8% of available margin
+        self.base_margin_ratio = 0.12  # 12% of available margin（从8%提高到12%）
         # Limit order settings (maker-friendly, with adaptive re-quote)
         self.limit_offset_pct = 0.0003  # 0.03% maker offset
         self.limit_cross_offset_pct = 0.0002  # 0.02% cross offset
@@ -59,6 +61,7 @@ class TradingAgent:
         self.level_discovery = LevelDiscovery()
         self.level_scoring = LevelScoring(f"{data_dir}/levels.json")
         self.level_finder = BestLevelFinder(f"{data_dir}/level_stats.json")
+        self.pattern_detector = PatternDetector()
         self.sl_tp = StopLossTakeProfit(self.level_scoring)
         self.position_sizer = PositionSizer(max_risk_percent=2.0)
         self.exit_manager = ExitManager(f"{data_dir}/exit_params.json")
@@ -75,6 +78,9 @@ class TradingAgent:
         self.risk = RiskController()
         self.thoughts = ThoughtChain()
         self.leverage_optimizer = LeverageOptimizer()
+        self.decision_learner = DecisionFeatureLearner(
+            os.path.join(data_dir, "decision_weights.json")
+        )
 
         # New modules: Market regime & Breakout detection
         self.regime_detector = MarketRegimeDetector()
@@ -97,11 +103,11 @@ class TradingAgent:
     def _get_entry_context(self, market: Dict) -> Dict:
         scores = self._score_entry(market)
         stats = self.trade_logger.get_stats()
-        # 固定阈值50，不再动态调整
-        effective_threshold = 50
+        # 提高阈值到55，确保只抓高质量信号
+        effective_threshold = 55
         return {
             "scores": scores,
-            "threshold": {"threshold": 50},
+            "threshold": {"threshold": 55},
             "effective_threshold": effective_threshold,
             "cooldown": self.entry_cooldown,
             "trade_count": stats.get("total_trades", 0),
@@ -340,20 +346,28 @@ class TradingAgent:
         return 0.0
 
     def _smart_leverage(self, signal_strength: float, north_star_score: float, stats: Dict) -> int:
-        leverage = float(self.base_leverage)
+        """
+        智能杠杆：15-30x动态范围（从3-50x收窄到更激进但可控的范围）
+        目标：单笔盈利$4-6，需要更高杠杆
+        """
+        leverage = float(self.base_leverage)  # 基础18x
+        
+        # 信号强度因子（55-100分 → 0.8-1.4倍）
         signal_factor = 0.8 + (max(0.0, min(signal_strength, 100.0)) / 100.0) * 0.6
-        ns_factor = 0.8 + (max(0.0, min(north_star_score, 100.0)) / 100.0) * 0.6
+        
+        # 胜率因子
         win_rate = float(stats.get("win_rate", 0)) / 100.0
-        if win_rate >= 0.6:
-            win_factor = 1.1
-        elif win_rate <= 0.35:
-            win_factor = 0.8
-        elif win_rate <= 0.45:
-            win_factor = 0.9
-        else:
+        if win_rate >= 0.55:
+            win_factor = 1.3  # 胜率高时更激进
+        elif win_rate >= 0.45:
             win_factor = 1.0
-        leverage *= signal_factor * ns_factor * win_factor
-        return max(3, min(50, int(round(leverage))))
+        else:
+            win_factor = 0.85  # 胜率低时保守
+        
+        leverage *= signal_factor * win_factor
+        
+        # 限制在15-30x范围（激进但可控）
+        return max(15, min(30, int(round(leverage))))
 
     def _smart_position_size(
         self,
@@ -367,10 +381,13 @@ class TradingAgent:
         if available_margin <= 0:
             return 0.0, self.leverage, 0.0
         leverage = self._smart_leverage(signal_strength, north_star_score, stats)
-        signal_factor = 0.6 + (max(0.0, min(signal_strength, 100.0)) / 100.0) * 0.4
-        ns_factor = 0.6 + (max(0.0, min(north_star_score, 100.0)) / 100.0) * 0.4
-        margin_ratio = self.base_margin_ratio * signal_factor * ns_factor
-        margin_ratio = max(0.02, min(0.20, margin_ratio))
+        
+        # 仓位调整：基于信号强度动态调整
+        signal_factor = 0.8 + (max(0.0, min(signal_strength, 100.0)) / 100.0) * 0.5
+        margin_ratio = self.base_margin_ratio * signal_factor
+        
+        # 允许更大仓位（上限提高到30%），以达到盈利目标
+        margin_ratio = max(0.05, min(0.30, margin_ratio))
         margin_budget = available_margin * margin_ratio
         notional_budget = margin_budget * leverage
         qty_by_margin = notional_budget / price if price > 0 else 0.0
@@ -472,6 +489,25 @@ class TradingAgent:
             candidates.update(group.get("support", []))
             candidates.update(group.get("resistance", []))
 
+        # Merge nearby levels across timeframes to avoid tight S/R clusters
+        def _merge_nearby(levels: List[float], tolerance_pct: float = 0.2) -> List[float]:
+            if not levels:
+                return []
+            sorted_levels = sorted(levels)
+            merged = []
+            current_group = [sorted_levels[0]]
+            for i in range(1, len(sorted_levels)):
+                distance_pct = (sorted_levels[i] - current_group[-1]) / current_group[-1] * 100
+                if distance_pct < tolerance_pct:
+                    current_group.append(sorted_levels[i])
+                else:
+                    merged.append(sum(current_group) / len(current_group))
+                    current_group = [sorted_levels[i]]
+            merged.append(sum(current_group) / len(current_group))
+            return merged
+
+        candidates = set(_merge_nearby(list(candidates), tolerance_pct=0.2))
+
         best_support = None
         best_resistance = None
 
@@ -516,6 +552,52 @@ class TradingAgent:
                         "feature_breakdown": breakdown,
                     }
 
+        # Enforce minimum S/R gap across timeframes (0.3%)
+        min_gap_pct = 0.3
+        if best_support and best_resistance:
+            gap_pct = (best_resistance["price"] - best_support["price"]) / current_price * 100
+            if gap_pct < min_gap_pct:
+                resistance_candidates = [
+                    ls for ls in level_scores if ls["price"] >= current_price
+                ]
+                resistance_candidates = sorted(
+                    resistance_candidates, key=lambda x: x["score"], reverse=True
+                )
+                min_resistance = best_support["price"] * (1 + min_gap_pct / 100)
+                far_resistance = next(
+                    (r for r in resistance_candidates if r["price"] >= min_resistance),
+                    None,
+                )
+                if far_resistance:
+                    best_resistance = {
+                        "price": far_resistance["price"],
+                        "score": far_resistance["score"],
+                        "features": far_resistance["features"],
+                        "feature_breakdown": far_resistance["breakdown"],
+                    }
+                else:
+                    support_candidates = [
+                        ls for ls in level_scores if ls["price"] <= current_price
+                    ]
+                    support_candidates = sorted(
+                        support_candidates, key=lambda x: x["score"], reverse=True
+                    )
+                    max_support = best_resistance["price"] * (1 - min_gap_pct / 100)
+                    far_support = next(
+                        (s for s in support_candidates if s["price"] <= max_support),
+                        None,
+                    )
+                    if far_support:
+                        best_support = {
+                            "price": far_support["price"],
+                            "score": far_support["score"],
+                            "features": far_support["features"],
+                            "feature_breakdown": far_support["breakdown"],
+                        }
+                    else:
+                        best_support = None
+                        best_resistance = None
+
         candidates_count = {
             "support": len(levels_1m.get("support", [])) + len(levels_15m.get("support", [])),
             "resistance": len(levels_1m.get("resistance", [])) + len(levels_15m.get("resistance", [])),
@@ -550,6 +632,12 @@ class TradingAgent:
                 best_resistance["price"], "resistance", kl_1m
             )
 
+        sr_gap_pct = None
+        sr_gap_valid = True
+        if best_support and best_resistance:
+            sr_gap_pct = (best_resistance["price"] - best_support["price"]) / current_price * 100
+            sr_gap_valid = sr_gap_pct >= min_gap_pct
+
         market = {
             "current_price": kl_1m[-1]["close"],
             "analysis_1m": analysis_1m,
@@ -560,10 +648,13 @@ class TradingAgent:
             "micro_trend": tf["micro_trend"],
             "best_support": best_support,
             "best_resistance": best_resistance,
+            "sr_gap_pct": sr_gap_pct,
+            "sr_gap_valid": sr_gap_valid,
             "candidates_count": candidates_count,
             "level_scores": self.last_level_scores,
             "tf_weights": tf_weights,
             "klines_1m": kl_1m[-240:] if kl_1m else [],
+            "klines_15m": kl_15m[-240:] if kl_15m else [],
             # New: regime and breakout info
             "regime": regime_info,
             "breakout_support": breakout_support,
@@ -613,32 +704,32 @@ class TradingAgent:
         elif regime == "VOLATILE":
             regime_multiplier = 0.7  # Be cautious
 
-        # Trend contribution (micro > macro for short-term trading)
+        # ========== 趋势评分（压缩权重，避免虚高）==========
         macro_dir = market["macro_trend"]["direction"]
         micro_dir = market.get("micro_trend", {}).get("direction")
-        # Micro trend (15m) has higher weight for short-term trading
+        # Micro trend (15m) 是短线核心，权重 20（从25降低）
         if micro_dir == "BULLISH":
-            long_score += 25
+            long_score += 20
         if micro_dir == "BEARISH":
-            short_score += 25
-        # Macro trend (8h/1w) has lower weight
+            short_score += 20
+        # Macro trend (8h/1w) 确认信号，权重 10（保持）
         if macro_dir == "BULLISH":
             long_score += 10
         if macro_dir == "BEARISH":
             short_score += 10
-        # If macro and micro diverge, trust micro more (short-term)
-        if macro_dir == "BULLISH" and micro_dir == "BEARISH":
-            long_score -= 10  # Penalize going against micro
+        # 如果宏观微观一致，额外奖励（双重确认）
+        if macro_dir == "BULLISH" and micro_dir == "BULLISH":
+            long_score += 5  # 双重确认奖励
+        elif macro_dir == "BEARISH" and micro_dir == "BEARISH":
             short_score += 5
+        # 如果背离，轻微惩罚（从-10改为-5）
+        if macro_dir == "BULLISH" and micro_dir == "BEARISH":
+            long_score -= 5
         if macro_dir == "BEARISH" and micro_dir == "BULLISH":
-            short_score -= 10  # Penalize going against micro
-            long_score += 5
+            short_score -= 5
 
-        # S/R score contribution (tight range for short-term trading)
-        # 核心逻辑：
-        # - 做多：靠近支撑位加分，靠近阻力位减分（上涨空间有限）
-        # - 做空：靠近阻力位加分，靠近支撑位减分（下跌空间有限）
-        
+        # ========== S/R 边界评分（权重最高，因为是核心优势）==========
+        # 核心逻辑：做多靠近支撑，做空靠近阻力
         support_price = 0
         resistance_price = 0
         support_distance_pct = 999
@@ -648,49 +739,45 @@ class TradingAgent:
             support_price = market["best_support"]["price"]
             support_distance_pct = abs(price - support_price) / price * 100
             sr_mult = self.regime_adjustments.get("sr_weight_multiplier", 1.0)
-            # 做多：靠近支撑位加分
-            if support_distance_pct < 0.1:  # Within 0.1% (~$100)
-                long_score += min(35, market["best_support"]["score"] / 2 * sr_mult)
-            elif support_distance_pct < 0.3:  # Within 0.3% (~$300)
-                long_score += min(20, market["best_support"]["score"] / 3 * sr_mult)
-            # 做空：靠近支撑位减分（下跌空间有限）
-            if support_distance_pct < 0.1:
-                short_score -= 20  # 惩罚在支撑位附近做空
+            # 做多：靠近支撑位加分（距离阈值与S/R间距对齐）
+            if support_distance_pct < 0.2:  # Within 0.2%（从0.1%放宽）
+                long_score += min(40, market["best_support"]["score"] / 2 * sr_mult)
+            elif support_distance_pct < 0.5:  # Within 0.5%（从0.3%放宽）
+                long_score += min(25, market["best_support"]["score"] / 3 * sr_mult)
+            # 做空：靠近支撑位减分
+            if support_distance_pct < 0.2:
+                short_score -= 18
 
         if market.get("best_resistance"):
             resistance_price = market["best_resistance"]["price"]
             resistance_distance_pct = abs(price - resistance_price) / price * 100
             sr_mult = self.regime_adjustments.get("sr_weight_multiplier", 1.0)
             # 做空：靠近阻力位加分
-            if resistance_distance_pct < 0.1:  # Within 0.1% (~$100)
-                short_score += min(35, market["best_resistance"]["score"] / 2 * sr_mult)
-            elif resistance_distance_pct < 0.3:  # Within 0.3% (~$300)
-                short_score += min(20, market["best_resistance"]["score"] / 3 * sr_mult)
-            # 做多：靠近阻力位减分（上涨空间有限）
-            if resistance_distance_pct < 0.1:
-                long_score -= 20  # 惩罚在阻力位附近做多
+            if resistance_distance_pct < 0.2:
+                short_score += min(40, market["best_resistance"]["score"] / 2 * sr_mult)
+            elif resistance_distance_pct < 0.5:
+                short_score += min(25, market["best_resistance"]["score"] / 3 * sr_mult)
+            # 做多：靠近阻力位减分
+            if resistance_distance_pct < 0.2:
+                long_score -= 18
         
-        # 额外检查：如果价格卡在支撑阻力之间的空间太小，两边都减分
-        if support_price > 0 and resistance_price > 0:
-            sr_range_pct = (resistance_price - support_price) / price * 100
-            if sr_range_pct < 0.3:  # 支撑阻力间距 < 0.3%，空间太小
-                long_score -= 15
-                short_score -= 15
+        # 空间检查：移除（已由Clearway Filter处理）
+        # S/R间距由levels.py和agent跨周期过滤保证≥0.3%
 
-        # RSI contribution (10 points, 15m)
+        # ========== 技术指标评分（辅助信号，权重压缩）==========
         rsi = analysis.get("rsi", 50)
         if rsi < 35:
-            long_score += 10
+            long_score += 8  # 从10降到8
         if rsi > 65:
-            short_score += 10
+            short_score += 8
 
-        # MACD contribution (10 points, 15m)
+        # MACD (从10降到8)
         if analysis.get("macd_histogram", 0) > 0:
-            long_score += 10
+            long_score += 8
         if analysis.get("macd_histogram", 0) < 0:
-            short_score += 10
+            short_score += 8
 
-        # 1m momentum boost to avoid long-bias in short-term downtrends
+        # 1m 动量（保持，因为权重已经很小）
         analysis_1m = market.get("analysis_1m", {})
         macd_1m = analysis_1m.get("macd_histogram", 0)
         rsi_1m = analysis_1m.get("rsi", 50)
@@ -703,9 +790,56 @@ class TradingAgent:
         if rsi_1m > 70:
             short_score += 4
 
-        # Apply regime multiplier and clamp to non-negative
+        # ========== K线形态评分（辅助确认，权重12）==========
+        # 修复漏洞8：初始化pattern_boost防止NameError
+        pattern_boost = {"long": 0, "short": 0}
+        pattern_hits = []
+        
+        try:
+            pattern_hits = self.pattern_detector.detect(market)
+            market["patterns"] = pattern_hits if pattern_hits else []  # 修复漏洞2：确保不是None
+            long_pattern_score = sum(p.get("score", 0) for p in pattern_hits if p.get("direction") == "LONG")
+            short_pattern_score = sum(p.get("score", 0) for p in pattern_hits if p.get("direction") == "SHORT")
+            long_score += min(12, int(long_pattern_score))
+            short_score += min(12, int(short_pattern_score))
+            pattern_boost = {"long": min(12, int(long_pattern_score)), "short": min(12, int(short_pattern_score))}
+        except Exception as e:
+            # 形态检测失败，不影响主流程
+            market["patterns"] = []
+
+        # Middle-ground penalty
+        is_middle_ground = False
+        if support_price > 0 and resistance_price > 0:
+            if support_distance_pct > 0.3 and resistance_distance_pct > 0.3:
+                is_middle_ground = True
+        if is_middle_ground and not pattern_hits:
+            long_score -= 10
+            short_score -= 10
+        
+        # ========== 决策特征学习（自我进化核心）==========
+        # 修复漏洞1：异常保护
+        long_learning_score = 0.0
+        short_learning_score = 0.0
+        long_features = {}
+        short_features = {}
+        
+        try:
+            long_features = self.decision_learner.extract_features(market, "LONG")
+            short_features = self.decision_learner.extract_features(market, "SHORT")
+            long_learning_score = self.decision_learner.score(long_features)
+            short_learning_score = self.decision_learner.score(short_features)
+            
+            long_score += int(round(long_learning_score))
+            short_score += int(round(short_learning_score))
+        except Exception as e:
+            # 学习模块失败，不影响基础交易
+            pass
+
+        # Apply regime multiplier and clamp to non-negative/upper bound
         long_score = int(max(0, long_score) * regime_multiplier)
         short_score = int(max(0, short_score) * regime_multiplier)
+        long_score = min(100, long_score)
+        short_score = min(100, short_score)
 
         return {
             "long": long_score,
@@ -713,6 +847,10 @@ class TradingAgent:
             "rsi": rsi,
             "regime": regime,
             "breakout_signal": breakout_signal,
+            "pattern_boost": pattern_boost,
+            "patterns": pattern_hits,
+            "decision_features": {"long": long_features, "short": short_features},
+            "learning_boost": {"long": round(long_learning_score, 2), "short": round(short_learning_score, 2)},
         }
 
     def should_enter(self, market: Dict) -> Optional[Dict]:
@@ -747,10 +885,21 @@ class TradingAgent:
                 "flip_action": breakout_signal.get("action"),  # For reversal logic
             }
 
+        # Adjacent multi-signal filter: enforce minimum S/R gap
+        if market.get("sr_gap_valid") is False:
+            return None
+
         # Normal score-based entry with trend-aware tie-breaking
         # MICRO trend takes priority for short-term trading
         long_ok = scores["long"] >= effective_threshold
         short_ok = scores["short"] >= effective_threshold
+        # Scheme B for middle-ground: allow if strong score or pattern confirmation
+        if scores.get("patterns"):
+            for p in scores["patterns"]:
+                if p.get("direction") == "LONG":
+                    long_ok = long_ok or scores["long"] >= effective_threshold
+                if p.get("direction") == "SHORT":
+                    short_ok = short_ok or scores["short"] >= effective_threshold
         if long_ok and short_ok:
             macro_dir = market.get("macro_trend", {}).get("direction")
             micro_dir = market.get("micro_trend", {}).get("direction")
@@ -770,6 +919,7 @@ class TradingAgent:
             else:
                 return None  # All signals unclear, don't enter
 
+            decision_features = scores.get("decision_features", {}).get(chosen.lower(), {})
             return {
                 "direction": chosen,
                 "reason": "score_trend_tiebreak",
@@ -777,6 +927,8 @@ class TradingAgent:
                 "threshold": threshold,
                 "effective_threshold": effective_threshold,
                 "strength": scores["long"] if chosen == "LONG" else scores["short"],
+                "patterns": scores.get("patterns"),
+                "decision_features": decision_features,
             }
 
         if long_ok:
@@ -787,6 +939,8 @@ class TradingAgent:
                 "threshold": threshold,
                 "effective_threshold": effective_threshold,
                 "strength": scores["long"],
+                "patterns": scores.get("patterns"),
+                "decision_features": scores.get("decision_features", {}).get("long", {}),
             }
         if short_ok:
             return {
@@ -796,6 +950,8 @@ class TradingAgent:
                 "threshold": threshold,
                 "effective_threshold": effective_threshold,
                 "strength": scores["short"],
+                "patterns": scores.get("patterns"),
+                "decision_features": scores.get("decision_features", {}).get("short", {}),
             }
         return None
 
@@ -834,7 +990,8 @@ class TradingAgent:
         price = market["current_price"]
         atr = market["analysis_15m"].get("atr", 0)
         self.sl_tp.update_params(self.strategy.get_sl_tp_params())
-        sltp = self.sl_tp.calculate(price, signal["direction"], atr)
+        # 传递market给智能止盈计算
+        sltp = self.sl_tp.calculate(price, signal["direction"], atr, market=market)
         stats = self.trade_logger.get_stats()
         north_star = self.north_star.evaluate(stats)
         signal_strength = float(signal.get("strength", 50))
@@ -905,6 +1062,8 @@ class TradingAgent:
                 "entry_reason": signal.get("reason", ""),
                 "batch_index": idx + 1,
                 "batch_ratio": batch.get("ratio"),
+                "patterns": signal.get("patterns", []),
+                "decision_features": signal.get("decision_features", {}),
                 "level_features": (
                     market.get("best_support", {}).get("features")
                     if signal["direction"] == "LONG"
@@ -1065,13 +1224,14 @@ class TradingAgent:
             "leverage": position.get("leverage", self.leverage),
             "pnl": round(pnl, 4),
             "pnl_percent": round(pnl_percent, 4),
-            "raw_pnl": round(raw_pnl, 4),  # 扣除手续费前的盈亏
-            "commission": round(total_commission, 4),  # 总手续费
+            "raw_pnl": round(raw_pnl, 4),
+            "commission": round(total_commission, 4),
             "exit_reason": reason,
             "timestamp_open": position["timestamp_open"],
             "timestamp_close": exit_time.isoformat(),
             "stop_loss": position.get("stop_loss"),
             "take_profit": position.get("take_profit"),
+            "patterns": position.get("patterns", []),
         }
         self.trade_logger.log_trade(trade)
         self.risk.update_trade_result(pnl_percent)
@@ -1102,6 +1262,18 @@ class TradingAgent:
             update = self.level_finder.update_weights(features, reward)
             if update:
                 trade["weight_update"] = update
+            
+            # ========== 决策特征学习（自我进化）==========
+            decision_features = position.get("decision_features", {})
+            # 修复漏洞7：空字典也应该学习（去掉if判断）
+            if decision_features and len(decision_features) > 0:
+                try:
+                    decision_update = self.decision_learner.update(decision_features, pnl_percent)
+                    trade["decision_learning"] = decision_update
+                except Exception as e:
+                    # 学习失败不影响交易记录
+                    pass
+        
         self.positions = [p for p in self.positions if p["trade_id"] != position["trade_id"]]
         self._save_positions()
         return trade
@@ -1221,6 +1393,7 @@ class TradingAgent:
             "short_score": scores["short"],
             "threshold": scores["min_score"],
             "phase": scores.get("phase", ""),
+            "pattern_boost": self.last_signal_state.get("scores", {}).get("pattern_boost", {"long": 0, "short": 0}),
         }
         if scores.get("threshold"):
             entry_info["base_threshold"] = scores["threshold"].get("threshold")

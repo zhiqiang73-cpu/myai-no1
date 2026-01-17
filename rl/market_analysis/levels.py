@@ -55,22 +55,22 @@ class LevelDiscovery:
 
     def _consolidation_levels(self, klines: List[Dict], min_touches: int = 3) -> List[float]:
         # 识别价格盘整区域（多次触及的价格）
-        # 短线交易使用更精确的精度
+        # 使用$100精度，过滤微小波动噪音
         if len(klines) < 20:
             return []
         levels = set()
         price_touches = {}
         for k in klines:
             for p in [k["high"], k["low"], k["close"]]:
-                rounded = round(p / 25) * 25  # $25 precision for short-term trading
+                rounded = round(p / 100) * 100  # $100 precision - 过滤噪音
                 price_touches[rounded] = price_touches.get(rounded, 0) + 1
         for price, count in price_touches.items():
             if count >= min_touches:
                 levels.add(price)
         return list(levels)
 
-    def _volume_profile_levels(self, klines: List[Dict], bucket: int = 25) -> List[float]:
-        # 成交量密集区（$25 精度，适合短线）
+    def _volume_profile_levels(self, klines: List[Dict], bucket: int = 100) -> List[float]:
+        # 成交量密集区（$100 精度）
         buckets = {}
         for k in klines:
             price = self._round_level(k["close"], bucket)
@@ -109,23 +109,63 @@ class LevelDiscovery:
         candidates.update(self._volume_profile_levels(klines))
         candidates.update(self._recent_high_low(klines, lookback=30))
 
-        # Dynamic band based on volatility (ATR) - tighter for short-term
+        # ========== Level Merging: 合并相近能级 ==========
+        def merge_nearby(levels: List[float], tolerance_pct: float = 0.2) -> List[float]:
+            """合并距离<0.2%的能级（避免密集堆积）"""
+            if not levels:
+                return []
+            sorted_levels = sorted(levels)
+            merged = []
+            current_group = [sorted_levels[0]]
+            
+            for i in range(1, len(sorted_levels)):
+                distance_pct = (sorted_levels[i] - current_group[-1]) / current_group[-1] * 100
+                if distance_pct < tolerance_pct:
+                    current_group.append(sorted_levels[i])
+                else:
+                    # 取平均作为代表
+                    merged.append(sum(current_group) / len(current_group))
+                    current_group = [sorted_levels[i]]
+            
+            merged.append(sum(current_group) / len(current_group))
+            return merged
+        
+        candidates = merge_nearby(list(candidates), tolerance_pct=0.2)
+
+        # Dynamic band（扩大搜索范围，匹配止盈需求）
         if max_distance_pct is None:
             if atr and current_price > 0:
-                # 短线交易使用更紧的范围：0.5% ~ 3%
-                max_distance_pct = min(max((atr / current_price) * 200, 0.5), 3.0)
+                # 扩大到2%-6%，为止盈提供足够空间
+                atr_pct = (atr / current_price) * 100
+                max_distance_pct = min(max(atr_pct * 250, 2.0), 6.0)
             else:
-                max_distance_pct = 1.5  # Default 1.5% for short-term
+                max_distance_pct = 3.0  # Default 3%
 
         def within_band(level: float) -> bool:
             return abs(level - current_price) / current_price * 100 <= max_distance_pct
 
         filtered = [c for c in candidates if within_band(c)]
-        # 不再回退到全部候选 - 如果没有符合条件的就返回空
-        # 这表示当前价格附近没有有效的支撑阻力位
         
-        support = sorted([c for c in filtered if c < current_price])[-5:]  # 最多5个支撑
-        resistance = sorted([c for c in filtered if c > current_price])[:5]  # 最多5个阻力
+        support = sorted([c for c in filtered if c < current_price])[-3:]  # 只取3个最强支撑
+        resistance = sorted([c for c in filtered if c > current_price])[:3]  # 只取3个最强阻力
+
+        # ========== 强制最小间距：确保交易空间 ==========
+        # 降低到0.3%（用户要求，更适合短线）
+        min_gap_pct = 0.3
+        
+        if support and resistance:
+            best_support = support[-1]
+            best_resistance = resistance[0]
+            gap_pct = (best_resistance - best_support) / current_price * 100
+            
+            # 如果间距<0.3%，寻找更远的S/R
+            if gap_pct < min_gap_pct:
+                new_resistance = [r for r in resistance if (r - best_support) / current_price * 100 >= min_gap_pct]
+                if new_resistance:
+                    resistance = new_resistance
+                else:
+                    # 如果找不到，返回空
+                    return {"support": [], "resistance": []}
 
         return {"support": support, "resistance": resistance}
 

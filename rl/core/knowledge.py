@@ -29,7 +29,10 @@ class TradeLogger:
                 timestamp_open TEXT,
                 timestamp_close TEXT,
                 stop_loss REAL,
-                take_profit REAL
+                take_profit REAL,
+                raw_pnl REAL,
+                commission REAL,
+                patterns TEXT
             )
             """
         )
@@ -45,8 +48,9 @@ class TradeLogger:
                 INSERT INTO trades (
                     trade_id, direction, entry_price, exit_price, quantity,
                     leverage, pnl, pnl_percent, exit_reason,
-                    timestamp_open, timestamp_close, stop_loss, take_profit
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    timestamp_open, timestamp_close, stop_loss, take_profit,
+                    raw_pnl, commission, patterns
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trade.get("trade_id"),
@@ -62,6 +66,9 @@ class TradeLogger:
                     trade.get("timestamp_close"),
                     trade.get("stop_loss"),
                     trade.get("take_profit"),
+                    trade.get("raw_pnl", 0),
+                    trade.get("commission", 0),
+                    json.dumps(trade.get("patterns", []), ensure_ascii=False),
                 ),
             )
         except sqlite3.IntegrityError:
